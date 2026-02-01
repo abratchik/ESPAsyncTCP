@@ -314,6 +314,7 @@ static void process_ssl_engine(tcp_ssl_pcb* ssl_pcb) {
       if (ssl_pcb->on_error) {
         ssl_pcb->on_error(ssl_pcb->arg, ssl_pcb->tcp, br_ssl_engine_last_error(eng));
       }
+      TCP_SSL_DEBUG("tcp_bearssl: SSL engine closed the connection, reason %d\n", eng->err);
       return;
     }
 
@@ -321,6 +322,7 @@ static void process_ssl_engine(tcp_ssl_pcb* ssl_pcb) {
       size_t len = 0;
       unsigned char* buf = br_ssl_engine_recvapp_buf(eng, &len);
       if (len > 0) {
+        TCP_SSL_DEBUG("tcp_bearssl: %u bytes of app data received\n", (unsigned)len);
         if (ssl_pcb->on_data) {
           ssl_pcb->on_data(ssl_pcb->arg, ssl_pcb->tcp, buf, len);
         }
@@ -333,6 +335,7 @@ static void process_ssl_engine(tcp_ssl_pcb* ssl_pcb) {
     unsigned char* buf = br_ssl_engine_sendrec_buf(eng, &len);
     if (len > 0) {
       if (tcp_sndbuf(ssl_pcb->tcp) >= len) {
+        TCP_SSL_DEBUG("tcp_bearssl: %u bytes of SSL record data to be sent\n", (unsigned)len);
         tcp_write(ssl_pcb->tcp, buf, len, TCP_WRITE_FLAG_COPY);
         br_ssl_engine_sendrec_ack(eng, len);
         tcp_output(ssl_pcb->tcp);
