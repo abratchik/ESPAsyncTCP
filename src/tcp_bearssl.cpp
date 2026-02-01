@@ -207,7 +207,7 @@ SSL_CTX* tcp_ssl_new_server_ctx(const char* cert_pem, const char* private_key_pe
   return (SSL_CTX*)ctx;
 }
 
-int tcp_ssl_new_client(struct tcp_pcb* pcb) {
+int tcp_ssl_new_client(struct tcp_pcb* pcb, const char *host) {
   tcp_ssl_pcb* ssl_pcb = new (std::nothrow) tcp_ssl_pcb();
   if (!ssl_pcb) return -1;
 
@@ -225,6 +225,8 @@ int tcp_ssl_new_client(struct tcp_pcb* pcb) {
   // Use the correct function name with the correct (5) arguments.
   br_ssl_engine_set_buffers_bidi(&ssl_pcb->sc_client.eng, ssl_pcb->inbuf, sizeof(ssl_pcb->inbuf),
                                  ssl_pcb->outbuf, sizeof(ssl_pcb->outbuf));
+
+  br_ssl_client_reset(&ssl_pcb->sc_client, host, 0);
   // -------------------------
 
   ssl_pcb->next = tcp_ssl_pcbs;

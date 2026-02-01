@@ -136,6 +136,7 @@ protected:
 #if ASYNC_TCP_SSL_ENABLED
   bool _pcb_secure;
   bool _handshake_done;
+  const char* _host;
 #endif
   uint32_t _pcb_sent_at;
   bool _close_pcb;

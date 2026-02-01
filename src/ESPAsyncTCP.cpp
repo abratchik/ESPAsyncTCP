@@ -282,6 +282,7 @@ bool AsyncClient::connect(const char* host, uint16_t port) {
 #if ASYNC_TCP_SSL_ENABLED
     _pcb_secure = secure;
     _handshake_done = !secure;
+    _host = host;
 #endif
     _connect_port = port;
     return true;
@@ -462,7 +463,7 @@ void AsyncClient::_connected(std::shared_ptr<ACErrorTracker>& errorTracker, void
     tcp_poll(_pcb, &_s_poll, 1);
 #if ASYNC_TCP_SSL_ENABLED
     if (_pcb_secure) {
-      if (tcp_ssl_new_client(_pcb) < 0) {
+      if (tcp_ssl_new_client(_pcb, _host) < 0) {
         _close();
         return;
       }

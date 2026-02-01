@@ -43,7 +43,7 @@ typedef void (*tcp_ssl_error_cb_t)(void* arg, struct tcp_pcb* tcp, int8_t err);
 
 SSL_CTX* tcp_ssl_new_server_ctx(const char* cert, const char* private_key_file,
                                 const char* password);
-int tcp_ssl_new_client(struct tcp_pcb* pcb);
+int tcp_ssl_new_client(struct tcp_pcb* pcb, const char* host = NULL);
 int tcp_ssl_new_server(struct tcp_pcb* pcb, SSL_CTX* ssl_ctx);
 int tcp_ssl_free(struct tcp_pcb* pcb);
 int tcp_ssl_write(struct tcp_pcb* pcb, const uint8_t* data, size_t len);
