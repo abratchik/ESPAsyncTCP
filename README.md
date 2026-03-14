@@ -22,7 +22,7 @@ It is recommended to install this library by referencing its Git repository in y
 
 ```ini
 lib_deps =
-    https://github.com/DhimasArdinata/ESPAsyncTCP.git
+    https://github.com/abratchik/ESPAsyncTCP.git
     ESPAsyncWebServer
 ```
 

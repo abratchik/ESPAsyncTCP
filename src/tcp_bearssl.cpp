@@ -25,7 +25,8 @@
 #include <memory>  // For std::unique_ptr (PROGMEM patch)
 #include <vector>
 
-#include "ESPAsyncTCP.h"  // Needs to be included here for its types
+#include "async_config.h"
+#include "DebugPrintMacros.h"
 
 BearSSL_SSL_CTX::~BearSSL_SSL_CTX() {
   for (auto& cert : chain_vector) {
@@ -101,7 +102,10 @@ static void append_to_cert_vector(void* ctx, const void* data, size_t len) {
   pctx->len += len;
 }
 
-static size_t parse_certificates(const char* pem, std::vector<br_x509_certificate>& certs) {
+
+// --- Public API Implementation ---
+
+size_t parse_certificates(const char* pem, std::vector<br_x509_certificate>& certs) {
   if (!pem) return 0;
 
   const unsigned char* data = (const unsigned char*)pem;
@@ -153,7 +157,6 @@ static size_t parse_certificates(const char* pem, std::vector<br_x509_certificat
   return certs.size();
 }
 
-// --- Public API Implementation ---
 
 SSL_CTX* tcp_ssl_new_server_ctx(const char* cert_pem, const char* private_key_pem,
                                 const char* password) {
@@ -207,9 +210,18 @@ SSL_CTX* tcp_ssl_new_server_ctx(const char* cert_pem, const char* private_key_pe
   return (SSL_CTX*)ctx;
 }
 
-int tcp_ssl_new_client(struct tcp_pcb* pcb, const char *host) {
+int tcp_ssl_new_client(struct tcp_pcb* pcb, const char* host, 
+                       const br_x509_trust_anchor *trust_anchors, size_t trust_anchors_num) {
+  
+  if (!pcb) return -1;
+  
+  TCP_SSL_DEBUG("tcp_ssl_new_client: %s, TA num=%d\n", host, trust_anchors_num);
+  
   tcp_ssl_pcb* ssl_pcb = new (std::nothrow) tcp_ssl_pcb();
-  if (!ssl_pcb) return -1;
+  if (!ssl_pcb) {
+    TCP_SSL_DEBUG("tcp_ssl_new_client: failed to create SSL PCB");
+    return -1;
+  }
 
   ssl_pcb->tcp = pcb;
   ssl_pcb->is_server = false;
@@ -219,20 +231,24 @@ int tcp_ssl_new_client(struct tcp_pcb* pcb, const char *host) {
   ssl_pcb->on_handshake = nullptr;
   ssl_pcb->on_error = nullptr;
 
-  br_ssl_client_init_full(&ssl_pcb->sc_client, &ssl_pcb->xc, NULL, 0);
+  
+  // Initialize BearSSL client with the x509 context and trust anchors
+  br_ssl_client_init_full(&ssl_pcb->sc_client, &ssl_pcb->xc, trust_anchors, trust_anchors_num);
 
   // --- COMPATIBILITY FIX ---
   // Use the correct function name with the correct (5) arguments.
   br_ssl_engine_set_buffers_bidi(&ssl_pcb->sc_client.eng, ssl_pcb->inbuf, sizeof(ssl_pcb->inbuf),
                                  ssl_pcb->outbuf, sizeof(ssl_pcb->outbuf));
 
+  // Set server name for SNI (required for TLS 1.2+)
   br_ssl_client_reset(&ssl_pcb->sc_client, host, 0);
   // -------------------------
 
   ssl_pcb->next = tcp_ssl_pcbs;
   tcp_ssl_pcbs = ssl_pcb;
   process_ssl_engine(ssl_pcb);
-  return 0;
+  
+  return ERR_OK;
 }
 
 int tcp_ssl_new_server(struct tcp_pcb* pcb, SSL_CTX* ssl_ctx) {
@@ -300,6 +316,8 @@ int tcp_ssl_free(struct tcp_pcb* pcb) {
 static void process_ssl_engine(tcp_ssl_pcb* ssl_pcb) {
   if (!ssl_pcb) return;
 
+  TCP_SSL_DEBUG("tcp_bearssl: Processing SSL engine for pcb %p\n", ssl_pcb->tcp);
+
   br_ssl_engine_context* eng;
   if (ssl_pcb->is_server) {
     eng = &ssl_pcb->sc_server.eng;
@@ -314,7 +332,7 @@ static void process_ssl_engine(tcp_ssl_pcb* ssl_pcb) {
       if (ssl_pcb->on_error) {
         ssl_pcb->on_error(ssl_pcb->arg, ssl_pcb->tcp, br_ssl_engine_last_error(eng));
       }
-      TCP_SSL_DEBUG("tcp_bearssl: SSL engine closed the connection, reason %d\n", eng->err);
+      TCP_SSL_DEBUG("ssl_engine: SSL engine closed the connection, reason %d\n", br_ssl_engine_last_error(eng));
       return;
     }
 
@@ -322,7 +340,7 @@ static void process_ssl_engine(tcp_ssl_pcb* ssl_pcb) {
       size_t len = 0;
       unsigned char* buf = br_ssl_engine_recvapp_buf(eng, &len);
       if (len > 0) {
-        TCP_SSL_DEBUG("tcp_bearssl: %u bytes of app data received\n", (unsigned)len);
+        TCP_SSL_DEBUG("ssl_engine: %u bytes of application data received\n", (unsigned)len);
         if (ssl_pcb->on_data) {
           ssl_pcb->on_data(ssl_pcb->arg, ssl_pcb->tcp, buf, len);
         }
@@ -335,7 +353,7 @@ static void process_ssl_engine(tcp_ssl_pcb* ssl_pcb) {
     unsigned char* buf = br_ssl_engine_sendrec_buf(eng, &len);
     if (len > 0) {
       if (tcp_sndbuf(ssl_pcb->tcp) >= len) {
-        TCP_SSL_DEBUG("tcp_bearssl: %u bytes of SSL record data to be sent\n", (unsigned)len);
+        TCP_SSL_DEBUG("ssl_engine: Sending %u bytes of SSL record\n", (unsigned)len);
         tcp_write(ssl_pcb->tcp, buf, len, TCP_WRITE_FLAG_COPY);
         br_ssl_engine_sendrec_ack(eng, len);
         tcp_output(ssl_pcb->tcp);
@@ -348,6 +366,7 @@ static void process_ssl_engine(tcp_ssl_pcb* ssl_pcb) {
 
   uint32_t state = br_ssl_engine_current_state(eng);
   if (!ssl_pcb->handshake_done && (state & BR_SSL_RECVAPP)) {
+    TCP_SSL_DEBUG("ssl_engine: Handshake complete!");
     ssl_pcb->handshake_done = true;
     if (ssl_pcb->on_handshake) {
       ssl_pcb->on_handshake(ssl_pcb->arg, ssl_pcb->tcp, &ssl_pcb->dummy_ssl);
@@ -429,21 +448,25 @@ SSL* tcp_ssl_get_ssl(struct tcp_pcb* pcb) {
 
 bool tcp_ssl_has(struct tcp_pcb* pcb) { return find_ssl_pcb(pcb) != nullptr; }
 
+// set on arg callback
 void tcp_ssl_arg(struct tcp_pcb* pcb, void* arg) {
   tcp_ssl_pcb* ssl_pcb = find_ssl_pcb(pcb);
   if (ssl_pcb) ssl_pcb->arg = arg;
 }
 
+// set on data callback
 void tcp_ssl_data(struct tcp_pcb* pcb, tcp_ssl_data_cb_t cb) {
   tcp_ssl_pcb* ssl_pcb = find_ssl_pcb(pcb);
   if (ssl_pcb) ssl_pcb->on_data = cb;
 }
 
+// Set on handshake callback
 void tcp_ssl_handshake(struct tcp_pcb* pcb, tcp_ssl_handshake_cb_t cb) {
   tcp_ssl_pcb* ssl_pcb = find_ssl_pcb(pcb);
   if (ssl_pcb) ssl_pcb->on_handshake = cb;
 }
 
+// Set on error callback
 void tcp_ssl_err(struct tcp_pcb* pcb, tcp_ssl_error_cb_t cb) {
   tcp_ssl_pcb* ssl_pcb = find_ssl_pcb(pcb);
   if (ssl_pcb) ssl_pcb->on_error = cb;

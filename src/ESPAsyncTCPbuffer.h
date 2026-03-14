@@ -25,18 +25,12 @@
 #ifndef ESPASYNCTCPBUFFER_H_
 #define ESPASYNCTCPBUFFER_H_
 
-//#define DEBUG_ASYNC_TCP(...)  while(((U0S >> USTXC) & 0x7F) != 0x00); os_printf( __VA_ARGS__ ); while(((U0S >> USTXC) & 0x7F) != 0x00)
-//#define DEBUG_ASYNC_TCP ASYNC_TCP_DEBUG
-#ifndef DEBUG_ASYNC_TCP
-#define DEBUG_ASYNC_TCP(...)
-#endif
-
 #include <Arduino.h>
+#include <memory>
 #include <cbuf.h>
 
-#include "ESPAsyncTCP.h"
-
-
+#include "DebugPrintMacros.h"
+#include "ESPAsyncTCPClient.h"
 
 typedef enum {
     ATB_RX_MODE_NONE,
@@ -46,16 +40,18 @@ typedef enum {
     ATB_RX_MODE_TERMINATOR_STRING
 } atbRxMode_t;
 
-class AsyncTCPbuffer: public Print {
+class AsyncTCPBuffer;
+
+typedef std::function<size_t(uint8_t * payload, size_t length)> AsyncTCPbufferDataCb;
+typedef std::function<void(bool ok, void * ret)> AsyncTCPbufferDoneCb;
+typedef std::function<bool(AsyncTCPBuffer * obj)> AsyncTCPbufferDisconnectCb;
+
+class AsyncTCPBuffer: public Print {
 
     public:
 
-        typedef std::function<size_t(uint8_t * payload, size_t length)> AsyncTCPbufferDataCb;
-        typedef std::function<void(bool ok, void * ret)> AsyncTCPbufferDoneCb;
-        typedef std::function<bool(AsyncTCPbuffer * obj)> AsyncTCPbufferDisconnectCb;
-
-        AsyncTCPbuffer(AsyncClient* c);
-        virtual ~AsyncTCPbuffer();
+        AsyncTCPBuffer(AsyncClient* c);
+        virtual ~AsyncTCPBuffer();
 
         size_t write(String & data);
         size_t write(uint8_t data);

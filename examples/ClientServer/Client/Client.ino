@@ -7,6 +7,7 @@ extern "C" {
 }
 
 #include "config.h"
+const char* TAG = "ino";
 
 static os_timer_t intervalTimer;
 
@@ -31,8 +32,20 @@ static void handleData(void* arg, AsyncClient* client, void *data, size_t len) {
 }
 
 void onConnect(void* arg, AsyncClient* client) {
-	Serial.printf("\n client has been connected to %s on port %d \n", SERVER_HOST_NAME, TCP_PORT);
+	Serial.printf("Connected to %s on port %d \n", HOST_URL, HOST_PORT);
 	replyToServer(client);
+}
+
+void onDisconnect(void* arg, AsyncClient* client) {
+	Serial.println("Disconnected");
+}
+
+void onError(void* arg, AsyncClient* client, err_t err) {
+	Serial.printf("Client error: %s\n", client->errorToString(err));
+}
+
+void onTimeout(void* arg, AsyncClient* client, uint32_t time) {
+	Serial.printf("Timeout: %u\n", time);
 }
 
 
@@ -42,7 +55,7 @@ void setup() {
 
 	// connects to access point
 	WiFi.mode(WIFI_STA);
-	WiFi.begin(SSID, PASSWORD);
+	WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
 	while (WiFi.status() != WL_CONNECTED) {
 		Serial.print('.');
 		delay(500);
@@ -51,7 +64,10 @@ void setup() {
 	AsyncClient* client = new AsyncClient;
 	client->onData(&handleData, client);
 	client->onConnect(&onConnect, client);
-	client->connect(SERVER_HOST_NAME, TCP_PORT);
+	client->onDisconnect(&onDisconnect, client);
+	client->onTimeout(&onTimeout, client);
+	client->onError(&onError, client);
+	client->connect(HOST_URL, HOST_PORT);
 
 	os_timer_disarm(&intervalTimer);
 	os_timer_setfn(&intervalTimer, &replyToServer, client);

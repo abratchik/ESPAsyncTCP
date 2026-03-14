@@ -9,6 +9,14 @@
 #define ASYNC_TCP_SSL_BUFFER_SIZE 1024
 #endif
 
+#define ASYNC_MAX_ACK_TIME 5000
+#define ASYNC_WRITE_FLAG_COPY \
+  0x01  // will allocate new buffer to hold the data while sending (else will hold reference to the
+        // data given)
+#define ASYNC_WRITE_FLAG_MORE \
+  0x02  // will not send PSH flag, meaning that there should be more data to be sent before the
+        // application should react.
+        
 #ifndef TCP_MSS
 // May have been definded as a -DTCP_MSS option on the compile line or not.
 // Arduino core 2.3.0 or earlier does not do the -DTCP_MSS option.

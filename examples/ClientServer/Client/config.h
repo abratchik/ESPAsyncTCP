@@ -12,12 +12,24 @@
  * Note: default MSS for ESPAsyncTCP is 536 byte and defualt ACK timeout is 5s.
 */
 
-#define SSID "ESP-TEST"
-#define PASSWORD "123456789"
+#ifndef WIFI_SSID
+#define WIFI_SSID "ESP-TEST"
+#endif
 
-#define SERVER_HOST_NAME "esp_server"
+#ifndef WIFI_PASSWORD
+#define WIFI_PASSWORD "123456789"
+#endif
 
-#define TCP_PORT 7050
+#ifndef HOST_URL
+#define HOST_URL "esp_server"
+#endif
+
+#ifndef HOST_PORT
+#define HOST_PORT 7050
+#endif
+
+#ifndef DNS_PORT
 #define DNS_PORT 53
+#endif
 
 #endif // CONFIG_H
