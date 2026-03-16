@@ -67,7 +67,10 @@ void setup() {
 	client->onDisconnect(&onDisconnect, client);
 	client->onTimeout(&onTimeout, client);
 	client->onError(&onError, client);
-	client->connect(HOST_URL, HOST_PORT);
+	
+	client->setInsecure();
+
+	client->connect(HOST_URL, HOST_PORT, true);
 
 	os_timer_disarm(&intervalTimer);
 	os_timer_setfn(&intervalTimer, &replyToServer, client);

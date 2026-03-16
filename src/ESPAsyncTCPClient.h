@@ -31,13 +31,13 @@ class AsyncClient {
 
     #if ASYNC_TCP_SSL_ENABLED
         AsyncClient(tcp_pcb* pcb = 0, SSL_CTX* ssl_ctx = NULL);
-        bool connect(IPAddress ip, uint16_t port, bool secure = false);
-        bool connect(const char* host, uint16_t port, bool secure = false);
+        bool connect(IPAddress ip, uint16_t port, bool use_tls = false);
+        bool connect(const char* host, uint16_t port, bool use_tls = false);
 
         SSL* getSSL() {return _pcb?tcp_ssl_get_ssl(_pcb):NULL; };
         // load X.509 certificates from the file system
         void load_ca_certs_from_pem(FS* fs, const char* path);
-        void setInsecure(bool insecure = true) { _pcb_secure = !insecure;};
+        void setInsecure(bool insecure = true) { _use_insecure = insecure;};
     #else
         AsyncClient(tcp_pcb* pcb = 0);
         bool connect(IPAddress ip, uint16_t port);
@@ -201,11 +201,24 @@ class AsyncClient {
         static err_t _s_connected(void* arg, void* tpcb, err_t err);
 
     #if ASYNC_TCP_SSL_ENABLED
-        bool _pcb_secure; // true if X.509 server validation is to be performed
+        bool _use_tls; // if false the TLS is switched off (unencrypted connection)
+        bool _use_insecure; // true if X.509 server validation is to be skipped
+        bool _use_fingerprint;
+        uint8_t _fingerprint[20];
+        bool _use_self_signed;
+        const BearSSL::PublicKey *_knownkey;
+        unsigned _knownkey_usages;
+
         bool _handshake_done;
         const char* _host;
         // Storage for certs (empty when insecure because we do not validate the server certificate)
         BearSSL::X509List* _ca_certs;
+
+        std::shared_ptr<br_x509_minimal_context> _x509_minimal;
+        std::shared_ptr<x509_insecure_context> _x509_insecure;
+        std::shared_ptr<br_x509_knownkey_context> _x509_knownkey;
+
+         bool _initClientX509Validator(); // Set up X509 validator for a client conn.
 
         void _ssl_error(int8_t err) {if (_error_cb) _error_cb(_error_cb_arg, this, err + 64);};
         static void _s_data(void* arg, struct tcp_pcb* tcp, uint8_t* data, size_t len);

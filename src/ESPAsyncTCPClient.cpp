@@ -44,7 +44,10 @@ AsyncClient::AsyncClient(tcp_pcb* pcb)
       _errorTracker(std::make_shared<ACErrorTracker>(this))
 #if ASYNC_TCP_SSL_ENABLED
       ,
-      _pcb_secure(false),
+      _use_tls(false),
+      _use_insecure(false),
+      _use_fingerprint(false),
+      _use_self_signed(false),
       _handshake_done(false)
 #endif
   {
@@ -77,8 +80,8 @@ AsyncClient::AsyncClient(tcp_pcb* pcb)
 
 AsyncClient::~AsyncClient() {
   if (_pcb) _close();
-
-  // _errorTracker->clearClient();
+  if(_use_tls)
+    _errorTracker->clearClient();
 }
 
 inline void clearTcpCallbacks(tcp_pcb* pcb) {
@@ -90,7 +93,7 @@ inline void clearTcpCallbacks(tcp_pcb* pcb) {
 }
 
 #if ASYNC_TCP_SSL_ENABLED
-bool AsyncClient::connect(IPAddress ip, uint16_t port, bool secure) {
+bool AsyncClient::connect(IPAddress ip, uint16_t port, bool use_tls) {
 #else
 bool AsyncClient::connect(IPAddress ip, uint16_t port) {
 #endif
@@ -98,6 +101,7 @@ bool AsyncClient::connect(IPAddress ip, uint16_t port) {
     return false;
   IPAddress addr;
   addr = ip;
+  _use_tls = use_tls;
 #if LWIP_VERSION_MAJOR == 1
   netif* interface = ip_route(&addr);
   if (!interface) {  // no route to host
@@ -111,7 +115,6 @@ bool AsyncClient::connect(IPAddress ip, uint16_t port) {
 
   tcp_setprio(pcb, TCP_PRIO_MIN);
 #if ASYNC_TCP_SSL_ENABLED
-  _pcb_secure = secure;
   _handshake_done = false;
 #endif
   tcp_arg(pcb, this);
@@ -121,21 +124,21 @@ bool AsyncClient::connect(IPAddress ip, uint16_t port) {
 }
 
 #if ASYNC_TCP_SSL_ENABLED
-bool AsyncClient::connect(const char* host, uint16_t port, bool secure) {
+bool AsyncClient::connect(const char* host, uint16_t port, bool use_tls) {
 #else
 bool AsyncClient::connect(const char* host, uint16_t port) {
 #endif
   IPAddress addr;
   err_t err = dns_gethostbyname(host, addr, (dns_found_callback)&_s_dns_found, this);
+  _use_tls = use_tls;
   if (err == ERR_OK) {
 #if ASYNC_TCP_SSL_ENABLED
-    return connect(addr, port, secure);
+    return connect(addr, port, _use_tls);
 #else
     return connect(addr, port);
 #endif
   } else if (err == ERR_INPROGRESS) {
 #if ASYNC_TCP_SSL_ENABLED
-    _pcb_secure = secure;
     _host = host;
     _handshake_done = false;
 #endif
@@ -166,15 +169,16 @@ AsyncClient& AsyncClient::operator=(const AsyncClient& other) {
     tcp_poll(_pcb, &_s_poll, 1);
 #if ASYNC_TCP_SSL_ENABLED
     if (tcp_ssl_has(_pcb)) {
-      // _pcb_secure = true;
-      // _handshake_done = false;
+      _use_tls = true;
+      _handshake_done = false;
       tcp_ssl_arg(_pcb, this);
       tcp_ssl_data(_pcb, &_s_data);
       tcp_ssl_handshake(_pcb, &_s_handshake);
       tcp_ssl_err(_pcb, &_s_ssl_error);
-      // } else {
-      // _pcb_secure = false;
-      // _handshake_done = true;
+    } 
+    else {
+      _use_tls = false;
+      _handshake_done = true;
     }
 #endif
   }
@@ -235,15 +239,15 @@ size_t AsyncClient::add(const char* data, size_t size, uint8_t apiflags) {
   size_t room = space();
   if (!room) return 0;
 #if ASYNC_TCP_SSL_ENABLED
-  // if (_pcb_secure) {
-  int sent = tcp_ssl_write(_pcb, (uint8_t*)data, size);
-  if (sent >= 0) {
-    _tx_unacked_len += sent;
-    return sent;
+  if (_use_tls) {
+    int sent = tcp_ssl_write(_pcb, (uint8_t*)data, size);
+    if (sent >= 0) {
+      _tx_unacked_len += sent;
+      return sent;
+    }
+    _close();
+    return 0;
   }
-  _close();
-  return 0;
-  // }
 #endif
   size_t will_send = (room < size) ? room : size;
   err_t err = tcp_write(_pcb, data, will_send, apiflags);
@@ -257,9 +261,9 @@ size_t AsyncClient::add(const char* data, size_t size, uint8_t apiflags) {
 }
 
 bool AsyncClient::send() {
-// #if ASYNC_TCP_SSL_ENABLED
-//   if (_pcb_secure) return true;
-// #endif
+#if ASYNC_TCP_SSL_ENABLED
+  if (_use_tls) return true;
+#endif
   err_t err = tcp_output(_pcb);
   if (err == ERR_OK) {
     _pcb_busy = true;
@@ -300,11 +304,6 @@ void AsyncClient::_connected(std::shared_ptr<ACErrorTracker>& errorTracker, void
     return;
   }
 
-#if ASYNC_TCP_SSL_ENABLED
-  ASYNC_TCP_DEBUG("_connected[%u, %s]: connected %s\n", errorTracker->getConnectionId(), _host, 
-     (_pcb_secure ? "secure" : "unsecure" ));
-#endif
-
   _pcb = reinterpret_cast<tcp_pcb*>(pcb);
   if (_pcb) {
     _pcb_busy = false;
@@ -314,37 +313,45 @@ void AsyncClient::_connected(std::shared_ptr<ACErrorTracker>& errorTracker, void
     tcp_sent(_pcb, &_s_sent);
     tcp_poll(_pcb, &_s_poll, 1);
 #if ASYNC_TCP_SSL_ENABLED
-    int err = ERR_OK;
-    if (_pcb_secure) {
-      if(!_ca_certs || _ca_certs->getCount() == 0 ) {
-        ASYNC_TCP_DEBUG("_connected[%u]: No trust anchors loaded, connection aborted!\n",
-                        errorTracker->getConnectionId());
+    if(_use_tls) {
+      int err = ERR_OK;
+      if(!_initClientX509Validator()) {
+        ASYNC_TCP_DEBUG("Unable to init the x509 validator\n");
+        _close();
+      }
+
+      if (_use_insecure || _use_fingerprint || _use_self_signed) {
+        ASYNC_TCP_DEBUG("Connecting %s\n", _use_insecure? "insecure":
+                                          _use_fingerprint? "using fingetprint":
+                                          _use_self_signed? "using self-signed certificate":"");
+        err = tcp_ssl_new_client(_pcb, _host, &_x509_insecure->vtable);
+      }
+      else if(_knownkey) {
+        ASYNC_TCP_DEBUG("Connecting by known key");
+        err = tcp_ssl_new_client(_pcb, _host, &_x509_knownkey->vtable);
+      }
+      else {
+        ASYNC_TCP_DEBUG("Connecting secure");
+        err = tcp_ssl_new_client(_pcb, _host, &_x509_minimal->vtable);
+      }
+        
+      if (err != ERR_OK) {
+        ASYNC_TCP_DEBUG("_connected[%u]: tcp_ssl_new_client() failed (%d), connection aborted!\n",
+                        errorTracker->getConnectionId(), err);
         _close();
         return;
       }
-      err = tcp_ssl_new_client(_pcb, _host, _ca_certs->getTrustAnchors(), _ca_certs->getCount());
-    }
-    else {
-      err = tcp_ssl_new_client(_pcb, _host, NULL, 0);
-    }
-      
-    if (err != ERR_OK) {
-      ASYNC_TCP_DEBUG("_connected[%u]: tcp_ssl_new_client() failed (%d), connection aborted!\n",
-                      errorTracker->getConnectionId(), err);
-      _close();
-      return;
-    }
 
-    tcp_ssl_arg(_pcb, this);
-    tcp_ssl_data(_pcb, &_s_data);
-    tcp_ssl_handshake(_pcb, &_s_handshake);
-    tcp_ssl_err(_pcb, &_s_ssl_error);
-
+      tcp_ssl_arg(_pcb, this);
+      tcp_ssl_data(_pcb, &_s_data);
+      tcp_ssl_handshake(_pcb, &_s_handshake);
+      tcp_ssl_err(_pcb, &_s_ssl_error);
+    }
 #endif
   }
 
   // call the onConnect callback handler
-  if (_connect_cb)
+  if (_connect_cb && connected())
     _connect_cb(_connect_cb_arg, this);
   return;
 }
@@ -352,9 +359,15 @@ void AsyncClient::_connected(std::shared_ptr<ACErrorTracker>& errorTracker, void
 void AsyncClient::_close() {
   if (_pcb) {
 #if ASYNC_TCP_SSL_ENABLED
-    //if (_pcb_secure) {
-    tcp_ssl_free(_pcb);
-    //}
+    if (_use_tls) {
+      tcp_ssl_free(_pcb);
+      _x509_minimal = nullptr;
+      _x509_insecure = nullptr;
+      _x509_knownkey = nullptr;
+
+      // This connection is toast
+      _handshake_done = false;
+    }
 #endif
     clearTcpCallbacks(_pcb);
     err_t err = tcp_close(_pcb);
@@ -378,9 +391,9 @@ void AsyncClient::_error(err_t err) {
                   ((NULL == _pcb) ? " NULL == _pcb!," : ""), ACErrorTracker::errorToString(err), err);
   if (_pcb) {
 #if ASYNC_TCP_SSL_ENABLED
-    // if (_pcb_secure) {
-    tcp_ssl_free(_pcb);
-    // }
+    if (_use_tls) {
+      tcp_ssl_free(_pcb);
+    }
 #endif
     // At this callback _pcb is possible already freed. Thus, no calls are
     // made to set to NULL other callbacks.
@@ -394,7 +407,7 @@ void AsyncClient::_error(err_t err) {
 void AsyncClient::_sent(std::shared_ptr<ACErrorTracker>& errorTracker, tcp_pcb* pcb, uint16_t len) {
   (void)pcb;
 #if ASYNC_TCP_SSL_ENABLED
-  if (!_handshake_done) return;
+  if (_use_tls && !_handshake_done) return;
 #endif
   _rx_last_packet = millis();
   _tx_unacked_len -= len;
@@ -461,17 +474,17 @@ void AsyncClient::_recv(std::shared_ptr<ACErrorTracker>& errorTracker, tcp_pcb* 
   _rx_last_packet = millis();
   errorTracker->setCloseError(ERR_OK);
 #if ASYNC_TCP_SSL_ENABLED
-  // if (_pcb_secure) {
+  if (_use_tls) {
 
-  ASYNC_TCP_DEBUG("_recv[%u]: %d\n", getConnectionId(), pb->tot_len);
-  int read_bytes = tcp_ssl_read(pcb, pb);
-  if (read_bytes < 0) {
-    ASYNC_TCP_DEBUG("_recv[%u] err: %d\n", getConnectionId(), read_bytes);
-    _close();
+    ASYNC_TCP_DEBUG("_recv[%u]: %d\n", getConnectionId(), pb->tot_len);
+    int read_bytes = tcp_ssl_read(pcb, pb);
+    if (read_bytes < 0) {
+      ASYNC_TCP_DEBUG("_recv[%u] err: %d\n", getConnectionId(), read_bytes);
+      _close();
+    }
+    return;
+
   }
-  return;
-
-  // }
 #endif
   while (pb != NULL) {
     // IF this callback function returns ERR_OK or ERR_ABRT
@@ -539,7 +552,7 @@ void AsyncClient::_poll(std::shared_ptr<ACErrorTracker>& errorTracker, tcp_pcb* 
   }
 #if ASYNC_TCP_SSL_ENABLED
   // SSL Handshake Timeout
-  if (!_handshake_done && (now - _rx_last_packet) >= 2000) {
+  if (_use_tls && !_handshake_done && (now - _rx_last_packet) >= TCP_SSL_HANDSHAKE_TIMEOUT) {
     ASYNC_TCP_DEBUG("_poll[%u]: SSL Handshake Timeout.\n", errorTracker->getConnectionId());
     _close();
     return;
@@ -557,7 +570,7 @@ void AsyncClient::_dns_found(const ip_addr* ipaddr) {
 #endif
   if (ipaddr) {
 #if ASYNC_TCP_SSL_ENABLED
-    connect(ipaddr, _connect_port, _pcb_secure);
+    connect(ipaddr, _connect_port, _use_tls);
 #else
     connect(ipaddr, _connect_port);
 #endif
@@ -684,41 +697,77 @@ void AsyncClient::load_ca_certs_from_pem(FS* fs, const char* path ) {
   f.close();
 }
 
+// Installs the appropriate X509 cert validation method for a client connection
+bool AsyncClient::_initClientX509Validator() {
+  if (_use_insecure || _use_fingerprint || _use_self_signed) {
+    // Use common insecure x509 authenticator
+    _x509_insecure = std::make_shared<x509_insecure_context>();
+    if (!_x509_insecure) {
+      ASYNC_TCP_DEBUG("_initClientX509Validator: OOM for _x509_insecure\n");
+      return false;
+    }
+    br_x509_insecure_init(_x509_insecure.get(), _use_fingerprint, _fingerprint, _use_self_signed);
+  } else if (_knownkey) {
+    // Simple, pre-known public key authenticator, ignores cert completely.
+    _x509_knownkey = std::make_shared<br_x509_knownkey_context>();
+    if (!_x509_knownkey) {
+      ASYNC_TCP_DEBUG("_initClientX509Validator: OOM for _x509_knownkey\n");
+      return false;
+    }
+    if (_knownkey->isRSA()) {
+      br_x509_knownkey_init_rsa(_x509_knownkey.get(), _knownkey->getRSA(), _knownkey_usages);
+    } else if (_knownkey->isEC()) {
+#ifndef BEARSSL_SSL_BASIC
+      br_x509_knownkey_init_ec(_x509_knownkey.get(), _knownkey->getEC(), _knownkey_usages);
+#else
+      (void) _knownkey;
+      (void) _knownkey_usages;
+      ASYNC_TCP_DEBUG("_initClientX509Validator: Attempting to use EC keys in minimal cipher mode (no EC)\n");
+      return false;
+#endif
+    }
+  } else {
+    // X509 minimal validator.  Checks dates, cert chain for trusted CA, etc.
+    _x509_minimal = std::make_shared<br_x509_minimal_context>();
+    if (!_x509_minimal) {
+      ASYNC_TCP_DEBUG("_initClientX509Validator: OOM for _x509_minimal\n");
+      return false;
+    }
+    if(!_ca_certs || _ca_certs->getCount() == 0 ) {
+      ASYNC_TCP_DEBUG("No trust anchors loaded, connection aborted!\n");
+      return false;
+    }
+    br_x509_minimal_init(_x509_minimal.get(), 
+                         &br_sha256_vtable, _ca_certs ? _ca_certs->getTrustAnchors() : nullptr, 
+                         _ca_certs ? _ca_certs->getCount() : 0);
+
+  }
+  return true;
+}
+
 #endif
 
 
 bool AsyncClient::connected() {
   if (!_pcb) return false;
 #if ASYNC_TCP_SSL_ENABLED
-  return _pcb->state == 4 && _handshake_done;
+  return _pcb->state == ESTABLISHED && (!_use_tls || _handshake_done);
 #else
-  return _pcb->state == 4;
+  return _pcb->state == ESTABLISHED;
 #endif
 }
 
-// Callback Setters
-
 size_t AsyncClient::space() {
+    if (connected()) {
+      uint16_t s = tcp_sndbuf(_pcb);
 #if ASYNC_TCP_SSL_ENABLED
-  if ((_pcb != NULL) && (_pcb->state == 4) && _handshake_done) {
-    uint16_t s = tcp_sndbuf(_pcb);
-    // if (_pcb_secure) {
-#ifdef AXTLS_2_0_0_SNDBUF
-    return tcp_ssl_sndbuf(_pcb);
-#else
-    if (s >= 128)  // safe approach
-      return s - 128;
-    return 0;
-#endif
-    // }
-    // return s;
-  }
-#else   // ASYNC_TCP_SSL_ENABLED 
-  if ((_pcb != NULL) && (_pcb->state == 4)) {
-    return tcp_sndbuf(_pcb);
-  }
-#endif  // ASYNC_TCP_SSL_ENABLED
-  return 0;
+      if (_use_tls) {
+        return (s >= 128)? s-128:0;  // safe approach
+      }
+#endif  
+      return s;
+    }
+    return 0; // not connected
 }
 
 void AsyncClient::ackPacket(struct pbuf* pb) {

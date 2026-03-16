@@ -35,6 +35,22 @@ struct BearSSL_SSL_CTX {
   ~BearSSL_SSL_CTX();
 };
 
+// BearSSL doesn't define a true insecure decoder, so we make one ourselves
+// from the simple parser.  It generates the issuer and subject hashes and
+// the SHA1 fingerprint, only one (or none!) of which will be used to
+// "verify" the certificate.
+// Private x509 decoder state
+typedef struct {
+  const br_x509_class *vtable;
+  bool done_cert;
+  const uint8_t *match_fingerprint;
+  br_sha1_context sha1_cert;
+  bool allow_self_signed;
+  br_sha256_context sha256_subject;
+  br_sha256_context sha256_issuer;
+  br_x509_decoder_context ctx;
+} x509_insecure_context;
+
 struct tcp_ssl_pcb;
 
 typedef void (*tcp_ssl_data_cb_t)(void* arg, struct tcp_pcb* tcp, uint8_t* data, size_t len);
@@ -43,9 +59,7 @@ typedef void (*tcp_ssl_error_cb_t)(void* arg, struct tcp_pcb* tcp, int8_t err);
 
 SSL_CTX* tcp_ssl_new_server_ctx(const char* cert, const char* private_key_file,
                                 const char* password);
-int tcp_ssl_new_client(struct tcp_pcb* pcb, const char* host, 
-                       const br_x509_trust_anchor *trust_anchors, 
-                       size_t trust_anchors_num);
+int tcp_ssl_new_client(struct tcp_pcb* pcb, const char* host,const br_x509_class **x509ctx);
 int tcp_ssl_new_server(struct tcp_pcb* pcb, SSL_CTX* ssl_ctx);
 int tcp_ssl_free(struct tcp_pcb* pcb);
 int tcp_ssl_write(struct tcp_pcb* pcb, const uint8_t* data, size_t len);
@@ -59,6 +73,10 @@ void tcp_ssl_handshake(struct tcp_pcb* pcb, tcp_ssl_handshake_cb_t cb);
 void tcp_ssl_err(struct tcp_pcb* pcb, tcp_ssl_error_cb_t cb);
 
 size_t parse_certificates(const char* pem, std::vector<br_x509_certificate>& certs);
+
+//  Set up the x509 insecure data structures for BearSSL core to use.
+void br_x509_insecure_init(x509_insecure_context* ctx, bool use_fingerprint, const uint8_t* fingerprint, bool allow_self_signed);
+
 
 #ifdef __cplusplus
 }
