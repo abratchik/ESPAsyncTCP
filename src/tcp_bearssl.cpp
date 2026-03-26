@@ -43,8 +43,8 @@ struct tcp_ssl_pcb {
   br_x509_minimal_context xc;
   // --- MEMORY OPTIMIZATION ---
   // Use two smaller, configurable split buffers.
-  unsigned char inbuf[ASYNC_TCP_SSL_BUFFER_SIZE];
-  unsigned char outbuf[ASYNC_TCP_SSL_BUFFER_SIZE];
+  unsigned char inbuf[ASYNC_TCP_SSL_IN_BUFFER_SIZE];
+  unsigned char outbuf[ASYNC_TCP_SSL_OUT_BUFFER_SIZE];
   // -------------------------
   bool is_server;
   bool handshake_done;
@@ -601,7 +601,7 @@ static void process_ssl_engine(tcp_ssl_pcb* ssl_pcb) {
     unsigned char* buf = br_ssl_engine_sendrec_buf(eng, &len);
     if (len > 0) {
       if (tcp_sndbuf(ssl_pcb->tcp) >= len) {
-        TCP_SSL_DEBUG("ssl_engine: Sending %u bytes of SSL record\n", (unsigned)len);
+        TCP_SSL_DEBUG("ssl_engine: Sending %u bytes of SSL record, state=%u\n", (unsigned)len, state);
         tcp_write(ssl_pcb->tcp, buf, len, TCP_WRITE_FLAG_COPY);
         br_ssl_engine_sendrec_ack(eng, len);
         tcp_output(ssl_pcb->tcp);
@@ -609,12 +609,16 @@ static void process_ssl_engine(tcp_ssl_pcb* ssl_pcb) {
       }
     }
 
+    TCP_SSL_DEBUG("Engine state is %u\n", state);
+
     break;
   }
 
   uint32_t state = br_ssl_engine_current_state(eng);
-  if (!ssl_pcb->handshake_done && (state & BR_SSL_RECVAPP)) {
-    TCP_SSL_DEBUG("ssl_engine: Handshake complete!");
+  if (!ssl_pcb->handshake_done && 
+     ((ssl_pcb->is_server && (state & BR_SSL_RECVAPP)) || 
+     (!ssl_pcb->is_server && (state & BR_SSL_SENDAPP)))) {
+    TCP_SSL_DEBUG("ssl_engine: Handshake complete!\n");
     ssl_pcb->handshake_done = true;
     if (ssl_pcb->on_handshake) {
       ssl_pcb->on_handshake(ssl_pcb->arg, ssl_pcb->tcp, &ssl_pcb->dummy_ssl);
@@ -651,10 +655,12 @@ int tcp_ssl_write(struct tcp_pcb* pcb, const uint8_t* data, size_t len) {
   return clen;
 }
 
-int tcp_ssl_read(struct tcp_pcb* pcb, struct pbuf* p) {
+int tcp_ssl_read(struct tcp_pcb* pcb, struct pbuf* pb) {
+
+  // find the associated ssl state for this connection
   tcp_ssl_pcb* ssl_pcb = find_ssl_pcb(pcb);
   if (!ssl_pcb) {
-    pbuf_free(p);
+    pbuf_free(pb);
     return -1;
   }
 
@@ -665,25 +671,32 @@ int tcp_ssl_read(struct tcp_pcb* pcb, struct pbuf* p) {
     eng = &ssl_pcb->sc_client.eng;
 
   size_t pbuf_offset = 0;
-  while (true) {
+  while (pbuf_offset < pb->tot_len) {
     size_t len;
     unsigned char* buf = br_ssl_engine_recvrec_buf(eng, &len);
     if (len > 0) {
-      size_t can_copy = pbuf_copy_partial(p, buf, len, pbuf_offset);
-      if (can_copy == 0) break;
-      br_ssl_engine_recvrec_ack(eng, can_copy);
-      pbuf_offset += can_copy;
+      size_t chunk_len = pbuf_copy_partial(pb, buf, len, pbuf_offset);
+      if (chunk_len == 0) {
+        TCP_SSL_DEBUG("Failed to copy %u bytes of %u at %u\n", len, pbuf_offset);
+        pbuf_free(pb);
+        return -1;
+      }
+      br_ssl_engine_recvrec_ack(eng, chunk_len);
+      pbuf_offset += chunk_len;
     } else {
-      break;
+      TCP_SSL_DEBUG("Failed to allocate input buffer\n");
+      pbuf_free(pb);
+      return -1;
     }
   }
 
-  tcp_recved(pcb, p->tot_len);
-  pbuf_free(p);
+  tcp_recved(pcb, pb->tot_len);
+  pbuf_free(pb);
 
   process_ssl_engine(ssl_pcb);
 
   if (br_ssl_engine_current_state(eng) & BR_SSL_CLOSED) return -1;
+
   return 0;
 }
 

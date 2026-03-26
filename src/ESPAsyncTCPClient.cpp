@@ -476,14 +476,13 @@ void AsyncClient::_recv(std::shared_ptr<ACErrorTracker>& errorTracker, tcp_pcb* 
 #if ASYNC_TCP_SSL_ENABLED
   if (_use_tls) {
 
-    ASYNC_TCP_DEBUG("_recv[%u]: %d\n", getConnectionId(), pb->tot_len);
+    ASYNC_TCP_DEBUG("ssl_recv[%u]: %d\n", getConnectionId(), pb->tot_len);
     int read_bytes = tcp_ssl_read(pcb, pb);
     if (read_bytes < 0) {
-      ASYNC_TCP_DEBUG("_recv[%u] err: %d\n", getConnectionId(), read_bytes);
+      ASYNC_TCP_DEBUG("ssl_recv[%u] err: %d\n", getConnectionId(), read_bytes);
       _close();
     }
     return;
-
   }
 #endif
   while (pb != NULL) {
