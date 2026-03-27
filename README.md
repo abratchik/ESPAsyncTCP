@@ -1,6 +1,7 @@
 # Modernized ESPAsyncTCP for ESP8266
 
-This is a modernized fork of the original ESPAsyncTCP library, a fully asynchronous TCP library for the ESP8266 Arduino core. This version has been significantly updated to provide robust, multi-connection networking with enhanced security and performance.
+This is a modernized fork of the  ESPAsyncTCP library modified by @dhimasardinata in order to support TLS based on BearSSL implementation for ESP8266 platform. The main objective of the fork is to ensure TLS is supported for the client connections as well. The other goal was to do cleanup and refactoring of the ESPAsyncTCP to ensure better readability and maintenance of the code. 
+IMPORTANT! Some of the "orphained" classes like SyncClient and AsyncPrinter have been removed as the main objective of the library is to support async TCP communication. Synchronous TCP connection is already available through other libraries while printer communication is rather related to the application layer of the OSI while Async TCP has to do with Network/Transport.
 
 ### Key Features & Enhancements
 
@@ -111,9 +112,7 @@ void loop() {
 
 ### Library Components
 
-- **AsyncClient and AsyncServer:** The powerful, low-level base classes for raw asynchronous TCP communication.
-- **AsyncPrinter:** A `Print` interface wrapper for sending data, usable outside of async callbacks (e.g., in `loop()`).
-- **SyncClient:** A standard, blocking TCP Client for simpler, synchronous tasks, similar to the one in `ESP8266WiFi`.
+- **AsyncClient and AsyncServer:** The powerful, low-level base classes for raw asynchronous TCP communication with TLS encryption.
 
 ### Libraries and Projects that use AsyncTCP
 
@@ -131,5 +130,7 @@ This library serves as a core dependency for many popular projects:
 This project is a fork of the original work which has since moved to the [ESP32Async](https://github.com/ESP32Async) organization.
 
 - Original ESP8266 Repo: [https://github.com/ESP32Async/ESPAsyncTCP](https://github.com/ESP32Async/ESPAsyncTCP)
+- Modified ESP8266 Repo with BearSSL support: [https://github.com/dhimasardinata/ESPAsyncTCP-BearSSL](https://github.com/dhimasardinata/ESPAsyncTCP-BearSSL) by @dhimasardinata. 
 - ESP32 Version: [https://github.com/ESP32Async/AsyncTCP](https://github.com/ESP32Async/AsyncTCP)
 - Discord Server: [https://discord.gg/X7zpGdyUcY](https://discord.gg/X7zpGdyUcY)
+

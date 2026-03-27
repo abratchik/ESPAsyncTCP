@@ -17,13 +17,11 @@
 
 #include "tcp_bearssl.h"
 
-#include <WiFiClientSecureBearSSL.h>
+#include <BearSSLHelpers.h>
 #include <bearssl/bearssl_pem.h>
 #include <lwip/tcp.h>  // Needs to be included for pcb functions
-#include <pgmspace.h>  // For PROGMEM functions (PROGMEM patch)
 
 #include <memory>  // For std::unique_ptr (PROGMEM patch)
-#include <vector>
 
 #include "async_config.h"
 #include "DebugPrintMacros.h"
@@ -458,11 +456,11 @@ int tcp_ssl_new_client(struct tcp_pcb* pcb, const char* host, const br_x509_clas
   
   if (!pcb) return -1;
   
-  TCP_SSL_DEBUG("tcp_ssl_new_client: %s\n", host);
+  TCP_SSL_DEBUG("Connecting to %s via TLS\n", host);
   
   tcp_ssl_pcb* ssl_pcb = new (std::nothrow) tcp_ssl_pcb();
   if (!ssl_pcb) {
-    TCP_SSL_DEBUG("tcp_ssl_new_client: failed to create SSL PCB");
+    TCP_SSL_DEBUG("Failed to create SSL context");
     return -1;
   }
 
@@ -487,7 +485,7 @@ int tcp_ssl_new_client(struct tcp_pcb* pcb, const char* host, const br_x509_clas
 
   // Set server name for SNI (required for TLS 1.2+)
   if(!br_ssl_client_reset(&ssl_pcb->sc_client, host, 0)) {
-    TCP_SSL_DEBUG("tcp_ssl_new_client: Can't reset client\n");
+    TCP_SSL_DEBUG("Can't reset SSL client\n");
     return -1;
   }
   // -------------------------
@@ -564,7 +562,7 @@ int tcp_ssl_free(struct tcp_pcb* pcb) {
 static void process_ssl_engine(tcp_ssl_pcb* ssl_pcb) {
   if (!ssl_pcb) return;
 
-  TCP_SSL_DEBUG("tcp_bearssl: Processing SSL engine for pcb %p\n", ssl_pcb->tcp);
+  TCP_SSL_DEBUG("TLS: Processing SSL engine for pcb %p\n", ssl_pcb->tcp);
 
   br_ssl_engine_context* eng;
   if (ssl_pcb->is_server) {
@@ -580,7 +578,7 @@ static void process_ssl_engine(tcp_ssl_pcb* ssl_pcb) {
       if (ssl_pcb->on_error) {
         ssl_pcb->on_error(ssl_pcb->arg, ssl_pcb->tcp, br_ssl_engine_last_error(eng));
       }
-      TCP_SSL_DEBUG("ssl_engine: SSL engine closed the connection, reason %d\n", br_ssl_engine_last_error(eng));
+      TCP_SSL_DEBUG("TLS: SSL engine closed the connection, reason %d\n", br_ssl_engine_last_error(eng));
       return;
     }
 
@@ -588,7 +586,7 @@ static void process_ssl_engine(tcp_ssl_pcb* ssl_pcb) {
       size_t len = 0;
       unsigned char* buf = br_ssl_engine_recvapp_buf(eng, &len);
       if (len > 0) {
-        TCP_SSL_DEBUG("ssl_engine: %u bytes of application data received\n", (unsigned)len);
+        TCP_SSL_DEBUG("TLS: %u bytes of application data received\n", (unsigned)len);
         if (ssl_pcb->on_data) {
           ssl_pcb->on_data(ssl_pcb->arg, ssl_pcb->tcp, buf, len);
         }
@@ -601,7 +599,7 @@ static void process_ssl_engine(tcp_ssl_pcb* ssl_pcb) {
     unsigned char* buf = br_ssl_engine_sendrec_buf(eng, &len);
     if (len > 0) {
       if (tcp_sndbuf(ssl_pcb->tcp) >= len) {
-        TCP_SSL_DEBUG("ssl_engine: Sending %u bytes of SSL record, state=%u\n", (unsigned)len, state);
+        TCP_SSL_DEBUG("TLS: sending %u bytes of SSL record, state=%u\n", (unsigned)len, state);
         tcp_write(ssl_pcb->tcp, buf, len, TCP_WRITE_FLAG_COPY);
         br_ssl_engine_sendrec_ack(eng, len);
         tcp_output(ssl_pcb->tcp);
@@ -609,7 +607,7 @@ static void process_ssl_engine(tcp_ssl_pcb* ssl_pcb) {
       }
     }
 
-    TCP_SSL_DEBUG("Engine state is %u\n", state);
+    TCP_SSL_DEBUG("TLS: SSL engine state is %u\n", state);
 
     break;
   }
@@ -618,7 +616,7 @@ static void process_ssl_engine(tcp_ssl_pcb* ssl_pcb) {
   if (!ssl_pcb->handshake_done && 
      ((ssl_pcb->is_server && (state & BR_SSL_RECVAPP)) || 
      (!ssl_pcb->is_server && (state & BR_SSL_SENDAPP)))) {
-    TCP_SSL_DEBUG("ssl_engine: Handshake complete!\n");
+    TCP_SSL_DEBUG("TLS: Handshake complete!\n");
     ssl_pcb->handshake_done = true;
     if (ssl_pcb->on_handshake) {
       ssl_pcb->on_handshake(ssl_pcb->arg, ssl_pcb->tcp, &ssl_pcb->dummy_ssl);

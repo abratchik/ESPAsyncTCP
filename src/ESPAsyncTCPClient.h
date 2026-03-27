@@ -206,11 +206,13 @@ class AsyncClient {
         bool _use_fingerprint;
         uint8_t _fingerprint[20];
         bool _use_self_signed;
-        const BearSSL::PublicKey *_knownkey;
+        
         unsigned _knownkey_usages;
 
         bool _handshake_done;
         const char* _host;
+        
+        const BearSSL::PublicKey *_knownkey;
         // Storage for certs (empty when insecure because we do not validate the server certificate)
         BearSSL::X509List* _ca_certs;
 
