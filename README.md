@@ -1,7 +1,8 @@
 # Modernized ESPAsyncTCP for ESP8266
 
-This is a modernized fork of the  ESPAsyncTCP library modified by @dhimasardinata in order to support TLS based on BearSSL implementation for ESP8266 platform. The main objective of the fork is to ensure TLS is supported for the client connections as well. The other goal was to do cleanup and refactoring of the ESPAsyncTCP to ensure better readability and maintenance of the code. 
-IMPORTANT! Some of the "orphained" classes like SyncClient and AsyncPrinter have been removed as the main objective of the library is to support async TCP communication. Synchronous TCP connection is already available through other libraries while printer communication is rather related to the application layer of the OSI while Async TCP has to do with Network/Transport.
+This is a modernized fork of the  ESPAsyncTCP library modified by @dhimasardinata in order to support TLS based on BearSSL implementation included in the ESP8266  platform. The main objective of the fork is to ensure TLS is supported for the client connections as well. The other goal was to do cleanup and refactoring of the ESPAsyncTCP to ensure better readability and maintenance of the code. 
+
+IMPORTANT! Some of the "orphained" classes like SyncClient and AsyncPrinter have been removed as the main objective of the library is to support async TCP communication. Synchronous TCP connection is already available through other libraries while printer communication is rather related to the Application layer of the OSI while AsyncTCP has to do with Network/Transport layers.
 
 ### Key Features & Enhancements
 
@@ -24,16 +25,36 @@ It is recommended to install this library by referencing its Git repository in y
 ```ini
 lib_deps =
     https://github.com/abratchik/ESPAsyncTCP.git
-    ESPAsyncWebServer
+```
+#### Enabling SSL/TLS
+
+In order to enable SSL/TLS support please specify the following:
+
+```
+build_flags = 
+    -D ASYNC_TCP_SSL_ENABLED=1
 ```
 
-#### Arduino IDE
+Additionally once can set the size of the input and output buffers used for secure connections:
 
-1.  Click on `Code` -> `Download ZIP`.
-2.  In the Arduino IDE, go to `Sketch` -> `Include Library` -> `Add .ZIP Library...` and select the downloaded file.
-3.  **Important:** If you have an older version of `ESPAsyncTCP` installed, you must remove it from your Arduino `libraries` folder first.
+```
+build_flags =
+    -D ASYNC_TCP_SSL_IN_BUFFER_SIZE=1024
+    -D ASYNC_TCP_SSL_OUT_BUFFER_SIZE=1024
+```
 
----
+#### Debugging SSL/TLS connections
+
+TCP  and especially TLS layer connectivity are memory-hungry so sometimes all used certificates and ciphers may not fit in memory for all possible scenarios. Debugging messages may help understand better the root cause of the problem using the build options below:
+
+```
+build_flags =
+    -D DEBUG_ESP_PORT=Serial
+    -D DEBUG_ESP_ASYNC_TCP=1
+    -D DEBUG_ESP_TCP_SSL=1 
+```
+
+
 
 ### Usage Example: A Secure HTTPS Web Server
 
