@@ -80,8 +80,10 @@ AsyncClient::AsyncClient(tcp_pcb* pcb)
 
 AsyncClient::~AsyncClient() {
   if (_pcb) _close();
+#if ASYNC_TCP_SSL_ENABLED
   if(_use_tls)
     _errorTracker->clearClient();
+#endif
 }
 
 inline void clearTcpCallbacks(tcp_pcb* pcb) {
