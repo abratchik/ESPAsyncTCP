@@ -68,10 +68,12 @@ void setup() {
 	client->onTimeout(&onTimeout, client);
 	client->onError(&onError, client);
 	
+#if ASYNC_TCP_SSL_ENABLED
 	client->setInsecure();
-
 	client->connect(HOST_URL, HOST_PORT, true);
-
+#else
+	client->connect(HOST_URL, HOST_PORT);
+#endif
 	os_timer_disarm(&intervalTimer);
 	os_timer_setfn(&intervalTimer, &replyToServer, client);
 }

@@ -96,6 +96,7 @@ inline void clearTcpCallbacks(tcp_pcb* pcb) {
 
 #if ASYNC_TCP_SSL_ENABLED
 bool AsyncClient::connect(IPAddress ip, uint16_t port, bool use_tls) {
+  _use_tls = use_tls;
 #else
 bool AsyncClient::connect(IPAddress ip, uint16_t port) {
 #endif
@@ -103,7 +104,6 @@ bool AsyncClient::connect(IPAddress ip, uint16_t port) {
     return false;
   IPAddress addr;
   addr = ip;
-  _use_tls = use_tls;
 #if LWIP_VERSION_MAJOR == 1
   netif* interface = ip_route(&addr);
   if (!interface) {  // no route to host
@@ -127,12 +127,12 @@ bool AsyncClient::connect(IPAddress ip, uint16_t port) {
 
 #if ASYNC_TCP_SSL_ENABLED
 bool AsyncClient::connect(const char* host, uint16_t port, bool use_tls) {
+  _use_tls = use_tls;
 #else
 bool AsyncClient::connect(const char* host, uint16_t port) {
 #endif
   IPAddress addr;
   err_t err = dns_gethostbyname(host, addr, (dns_found_callback)&_s_dns_found, this);
-  _use_tls = use_tls;
   if (err == ERR_OK) {
 #if ASYNC_TCP_SSL_ENABLED
     return connect(addr, port, _use_tls);
