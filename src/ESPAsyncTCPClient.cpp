@@ -127,6 +127,9 @@ bool AsyncClient::connect(IPAddress ip, uint16_t port) {
 
 #if ASYNC_TCP_SSL_ENABLED
 bool AsyncClient::connect(const char* host, uint16_t port, bool use_tls) {
+  _handshake_done = false;
+  _host = host;
+  _connect_port = port;
   _use_tls = use_tls;
 #else
 bool AsyncClient::connect(const char* host, uint16_t port) {
@@ -139,12 +142,8 @@ bool AsyncClient::connect(const char* host, uint16_t port) {
 #else
     return connect(addr, port);
 #endif
-  } else if (err == ERR_INPROGRESS) {
-#if ASYNC_TCP_SSL_ENABLED
-    _host = host;
-    _handshake_done = false;
-#endif
-    _connect_port = port;
+  } 
+  else if (err == ERR_INPROGRESS) {
     return true;
   }
   return false;
@@ -326,6 +325,7 @@ void AsyncClient::_connected(std::shared_ptr<ACErrorTracker>& errorTracker, void
         ASYNC_TCP_DEBUG("Connecting %s\n", _use_insecure? "insecure":
                                           _use_fingerprint? "using fingetprint":
                                           _use_self_signed? "using self-signed certificate":"");
+        ASYNC_TCP_DEBUG("Host: %s\n", _host);                    
         err = tcp_ssl_new_client(_pcb, _host, &_x509_insecure->vtable);
       }
       else if(_knownkey) {
