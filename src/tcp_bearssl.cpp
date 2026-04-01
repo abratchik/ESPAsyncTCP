@@ -628,7 +628,10 @@ static void process_ssl_engine(tcp_ssl_pcb* ssl_pcb) {
 
 int tcp_ssl_write(struct tcp_pcb* pcb, const uint8_t* data, size_t len) {
   tcp_ssl_pcb* ssl_pcb = find_ssl_pcb(pcb);
-  if (!ssl_pcb) return -1;
+  if (!ssl_pcb) {
+    TCP_SSL_DEBUG("tcp_ssl_write: No SSL context found for pcb %p\n", pcb);
+    return -1;
+  }
 
   br_ssl_engine_context* eng;
   if (ssl_pcb->is_server)
@@ -636,11 +639,16 @@ int tcp_ssl_write(struct tcp_pcb* pcb, const uint8_t* data, size_t len) {
   else
     eng = &ssl_pcb->sc_client.eng;
 
-  if (!(br_ssl_engine_current_state(eng) & BR_SSL_SENDAPP)) return 0;
+  unsigned int state = br_ssl_engine_current_state(eng);
+  if (!(state & BR_SSL_SENDAPP)) {
+    TCP_SSL_DEBUG("tcp_ssl_write: SSL engine not ready to send application data, state=%u\n", state);
+    return 0;
+  }
 
   size_t wlen;
   unsigned char* buf = br_ssl_engine_sendapp_buf(eng, &wlen);
   if (wlen == 0) {
+    TCP_SSL_DEBUG("tcp_ssl_write: SSL engine failed to provide output buffer\n");
     process_ssl_engine(ssl_pcb);
     return 0;
   }
@@ -658,6 +666,7 @@ int tcp_ssl_read(struct tcp_pcb* pcb, struct pbuf* pb) {
   // find the associated ssl state for this connection
   tcp_ssl_pcb* ssl_pcb = find_ssl_pcb(pcb);
   if (!ssl_pcb) {
+    TCP_SSL_DEBUG("tcp_ssl_read: No SSL context found for pcb %p\n", pcb);
     pbuf_free(pb);
     return -1;
   }
@@ -693,7 +702,11 @@ int tcp_ssl_read(struct tcp_pcb* pcb, struct pbuf* pb) {
 
   process_ssl_engine(ssl_pcb);
 
-  if (br_ssl_engine_current_state(eng) & BR_SSL_CLOSED) return -1;
+  unsigned int state = br_ssl_engine_current_state(eng);
+  if (state & BR_SSL_CLOSED) {
+    TCP_SSL_DEBUG("tcp_ssl_read: SSL engine closed the connection, reason %d\n", br_ssl_engine_last_error(eng));
+    return -1;
+  }
 
   return 0;
 }

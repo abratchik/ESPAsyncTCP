@@ -64,7 +64,7 @@ class AsyncClient {
 
         size_t space();
 
-        // add for sending
+        // add for sending or actually send data in case of TLS connection.
         size_t add(const char* data, size_t size, uint8_t apiflags = 0); 
         
         // send all data added with the method above

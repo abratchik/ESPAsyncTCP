@@ -236,9 +236,16 @@ size_t AsyncClient::write(const char* data, size_t size, uint8_t apiflags) {
 }
 
 size_t AsyncClient::add(const char* data, size_t size, uint8_t apiflags) {
-  if (!_pcb || size == 0 || data == NULL) return 0;
+  if (!_pcb || size == 0 || data == NULL) {
+    ASYNC_TCP_DEBUG("add[%u]: Invalid parameters, _pcb: %s, size: %u, data: %s\n", getConnectionId(),
+                    (_pcb ? "valid" : "NULL"), size, (data ? "valid" : "NULL"));
+    return 0;
+  }
   size_t room = space();
-  if (!room) return 0;
+  if (!room) {
+    ASYNC_TCP_DEBUG("add[%u]: No space to add data, size: %u\n", getConnectionId(), size);
+    return 0;
+  }
 #if ASYNC_TCP_SSL_ENABLED
   if (_use_tls) {
     int sent = tcp_ssl_write(_pcb, (uint8_t*)data, size);
@@ -412,7 +419,7 @@ void AsyncClient::_sent(std::shared_ptr<ACErrorTracker>& errorTracker, tcp_pcb* 
   if (_use_tls && !_handshake_done) return;
 #endif
   _rx_last_packet = millis();
-  _tx_unacked_len -= len;
+  _tx_unacked_len -= _tx_unacked_len>len?len:0;
   _tx_acked_len += len;
   ASYNC_TCP_DEBUG("_sent[%u]: %4u, unacked=%4u, acked=%4u, space=%4u\n",
                   errorTracker->getConnectionId(), len, _tx_unacked_len, _tx_acked_len, space());
