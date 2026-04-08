@@ -210,159 +210,159 @@ SSL_CTX* tcp_ssl_new_server_ctx(const char* cert_pem, const char* private_key_pe
 
 // Private x509 decoder state
 
-    // Callback for the x509_minimal subject DN
-  static void insecure_subject_dn_append(void *ctx, const void *buf, size_t len) {
-    x509_insecure_context *xc = (x509_insecure_context *)ctx;
-    br_sha256_update(&xc->sha256_subject, buf, len);
-  }
+// Callback for the x509_minimal subject DN
+static void insecure_subject_dn_append(void *ctx, const void *buf, size_t len) {
+  x509_insecure_context *xc = (x509_insecure_context *)ctx;
+  br_sha256_update(&xc->sha256_subject, buf, len);
+}
 
-  // Callback for the x509_minimal issuer DN
-  static void insecure_issuer_dn_append(void *ctx, const void *buf, size_t len) {
-    x509_insecure_context *xc = (x509_insecure_context *)ctx;
-    br_sha256_update(&xc->sha256_issuer, buf, len);
-  }
+// Callback for the x509_minimal issuer DN
+static void insecure_issuer_dn_append(void *ctx, const void *buf, size_t len) {
+  x509_insecure_context *xc = (x509_insecure_context *)ctx;
+  br_sha256_update(&xc->sha256_issuer, buf, len);
+}
 
-   // Callback on the first byte of any certificate
-  static void insecure_start_chain(const br_x509_class **ctx, const char *server_name) {
-    x509_insecure_context *xc = (x509_insecure_context *)ctx;
-    br_x509_decoder_init(&xc->ctx, insecure_subject_dn_append, xc, insecure_issuer_dn_append, xc);
-    xc->done_cert = false;
-    br_sha1_init(&xc->sha1_cert);
-    br_sha256_init(&xc->sha256_subject);
-    br_sha256_init(&xc->sha256_issuer);
-    (void)server_name;
-  }
+// Callback on the first byte of any certificate
+static void insecure_start_chain(const br_x509_class **ctx, const char *server_name) {
+  x509_insecure_context *xc = (x509_insecure_context *)ctx;
+  br_x509_decoder_init(&xc->ctx, insecure_subject_dn_append, xc, insecure_issuer_dn_append, xc);
+  xc->done_cert = false;
+  br_sha1_init(&xc->sha1_cert);
+  br_sha256_init(&xc->sha256_subject);
+  br_sha256_init(&xc->sha256_issuer);
+  (void)server_name;
+}
 
-    // Callback for each certificate present in the chain (but only operates
-  // on the first one by design).
-  static void insecure_start_cert(const br_x509_class **ctx, uint32_t length) {
-    (void) ctx;
-    (void) length;
-  }
+// Callback for each certificate present in the chain (but only operates
+// on the first one by design).
+static void insecure_start_cert(const br_x509_class **ctx, uint32_t length) {
+  (void) ctx;
+  (void) length;
+}
 
-    // Callback for each byte stream in the chain.  Only process first cert.
-  static void insecure_append(const br_x509_class **ctx, const unsigned char *buf, size_t len) {
-    x509_insecure_context *xc = (x509_insecure_context *)ctx;
-    // Don't process anything but the first certificate in the chain
-    if (!xc->done_cert) {
-      br_sha1_update(&xc->sha1_cert, buf, len);
-      br_x509_decoder_push(&xc->ctx, (const void*)buf, len);
+// Callback for each byte stream in the chain.  Only process first cert.
+static void insecure_append(const br_x509_class **ctx, const unsigned char *buf, size_t len) {
+  x509_insecure_context *xc = (x509_insecure_context *)ctx;
+  // Don't process anything but the first certificate in the chain
+  if (!xc->done_cert) {
+    br_sha1_update(&xc->sha1_cert, buf, len);
+    br_x509_decoder_push(&xc->ctx, (const void*)buf, len);
 #if defined(DEBUG_ESP_SSL) && defined(DEBUG_ESP_PORT)
-      DEBUG_BSSL("CERT: ");
-      for (size_t i=0; i<len; i++) {
-        DEBUG_ESP_PORT.printf_P(PSTR("%02x "), buf[i] & 0xff);
-      }
-      DEBUG_ESP_PORT.printf_P(PSTR("\n"));
+    DEBUG_BSSL("CERT: ");
+    for (size_t i=0; i<len; i++) {
+      DEBUG_ESP_PORT.printf_P(PSTR("%02x "), buf[i] & 0xff);
+    }
+    DEBUG_ESP_PORT.printf_P(PSTR("\n"));
 #endif
-    }
+  }
+}
+
+// Callback on individual cert end.
+static void insecure_end_cert(const br_x509_class **ctx) {
+  x509_insecure_context *xc = (x509_insecure_context *)ctx;
+  xc->done_cert = true;
+}
+
+// Callback when complete chain has been parsed.
+// Return 0 on validation success, !0 on validation error
+static unsigned insecure_end_chain(const br_x509_class **ctx) {
+  const x509_insecure_context *xc = (const x509_insecure_context *)ctx;
+  if (!xc->done_cert) {
+    TCP_SSL_DEBUG("insecure_end_chain: No cert seen\n");
+    return 1; // error
   }
 
-  // Callback on individual cert end.
-  static void insecure_end_cert(const br_x509_class **ctx) {
-    x509_insecure_context *xc = (x509_insecure_context *)ctx;
-    xc->done_cert = true;
-  }
-
-  // Callback when complete chain has been parsed.
-  // Return 0 on validation success, !0 on validation error
-  static unsigned insecure_end_chain(const br_x509_class **ctx) {
-    const x509_insecure_context *xc = (const x509_insecure_context *)ctx;
-    if (!xc->done_cert) {
-      TCP_SSL_DEBUG("insecure_end_chain: No cert seen\n");
-      return 1; // error
-    }
-
-    // Handle SHA1 fingerprint matching
-    char res[20];
-    br_sha1_out(&xc->sha1_cert, res);
-    if (xc->match_fingerprint && memcmp(res, xc->match_fingerprint, sizeof(res))) {
+  // Handle SHA1 fingerprint matching
+  char res[20];
+  br_sha1_out(&xc->sha1_cert, res);
+  if (xc->match_fingerprint && memcmp(res, xc->match_fingerprint, sizeof(res))) {
 #ifdef DEBUG_ESP_SSL
-      DEBUG_BSSL("insecure_end_chain: Received cert FP doesn't match\n");
-      char buff[3 * sizeof(res) + 1]; // 3 chars per byte XX_, and null
-      buff[0] = 0;
-      for (size_t i=0; i<sizeof(res); i++) {
-        char hex[4]; // XX_\0
-        snprintf(hex, sizeof(hex), "%02x ", xc->match_fingerprint[i] & 0xff);
-        strlcat(buff, hex, sizeof(buff));
-      }
-      DEBUG_BSSL("insecure_end_chain: expected %s\n", buff);
-      buff[0] =0;
-      for (size_t i=0; i<sizeof(res); i++) {
-        char hex[4]; // XX_\0
-        snprintf(hex, sizeof(hex), "%02x ", res[i] & 0xff);
-        strlcat(buff, hex, sizeof(buff));
-      }
-      DEBUG_BSSL("insecure_end_chain: received %s\n", buff);
+    DEBUG_BSSL("insecure_end_chain: Received cert FP doesn't match\n");
+    char buff[3 * sizeof(res) + 1]; // 3 chars per byte XX_, and null
+    buff[0] = 0;
+    for (size_t i=0; i<sizeof(res); i++) {
+      char hex[4]; // XX_\0
+      snprintf(hex, sizeof(hex), "%02x ", xc->match_fingerprint[i] & 0xff);
+      strlcat(buff, hex, sizeof(buff));
+    }
+    DEBUG_BSSL("insecure_end_chain: expected %s\n", buff);
+    buff[0] =0;
+    for (size_t i=0; i<sizeof(res); i++) {
+      char hex[4]; // XX_\0
+      snprintf(hex, sizeof(hex), "%02x ", res[i] & 0xff);
+      strlcat(buff, hex, sizeof(buff));
+    }
+    DEBUG_BSSL("insecure_end_chain: received %s\n", buff);
 #endif
-      return BR_ERR_X509_NOT_TRUSTED;
-    }
-
-    // Handle self-signer certificate acceptance
-    char res_issuer[32];
-    char res_subject[32];
-    br_sha256_out(&xc->sha256_issuer, res_issuer);
-    br_sha256_out(&xc->sha256_subject, res_subject);
-    if (xc->allow_self_signed && memcmp(res_subject, res_issuer, sizeof(res_issuer))) {
-      TCP_SSL_DEBUG("insecure_end_chain: Didn't get self-signed cert\n");
-      return BR_ERR_X509_NOT_TRUSTED;
-    }
-
-    // Default (no validation at all) or no errors in prior checks = success.
-    return 0;
+    return BR_ERR_X509_NOT_TRUSTED;
   }
 
-  // Return the public key from the validator (set by x509_minimal)
-  static const br_x509_pkey *insecure_get_pkey(const br_x509_class *const *ctx, unsigned *usages) {
-    const x509_insecure_context *xc = (const x509_insecure_context *)ctx;
-    if (usages != NULL) {
-      *usages = BR_KEYTYPE_KEYX | BR_KEYTYPE_SIGN; // I said we were insecure!
-    }
-    return &xc->ctx.pkey;
+  // Handle self-signer certificate acceptance
+  char res_issuer[32];
+  char res_subject[32];
+  br_sha256_out(&xc->sha256_issuer, res_issuer);
+  br_sha256_out(&xc->sha256_subject, res_subject);
+  if (xc->allow_self_signed && memcmp(res_subject, res_issuer, sizeof(res_issuer))) {
+    TCP_SSL_DEBUG("insecure_end_chain: Didn't get self-signed cert\n");
+    return BR_ERR_X509_NOT_TRUSTED;
   }
 
+  // Default (no validation at all) or no errors in prior checks = success.
+  return 0;
+}
 
-  //  Set up the x509 insecure data structures for BearSSL core to use.
-  void br_x509_insecure_init(x509_insecure_context *ctx, int use_fingerprint, const uint8_t* fingerprint, int allow_self_signed) {
-    static const br_x509_class br_x509_insecure_vtable PROGMEM = {
-      sizeof(x509_insecure_context),
-      insecure_start_chain,
-      insecure_start_cert,
-      insecure_append,
-      insecure_end_cert,
-      insecure_end_chain,
-      insecure_get_pkey
-    };
-
-    memset(ctx, 0, sizeof * ctx);
-    ctx->vtable = &br_x509_insecure_vtable;
-    ctx->done_cert = false;
-    ctx->match_fingerprint = use_fingerprint ? fingerprint : nullptr;
-    ctx->allow_self_signed = allow_self_signed ? 1 : 0;
+// Return the public key from the validator (set by x509_minimal)
+static const br_x509_pkey *insecure_get_pkey(const br_x509_class *const *ctx, unsigned *usages) {
+  const x509_insecure_context *xc = (const x509_insecure_context *)ctx;
+  if (usages != NULL) {
+    *usages = BR_KEYTYPE_KEYX | BR_KEYTYPE_SIGN; // I said we were insecure!
   }
+  return &xc->ctx.pkey;
+}
+
+
+//  Set up the x509 insecure data structures for BearSSL core to use.
+void br_x509_insecure_init(x509_insecure_context *ctx, int use_fingerprint, const uint8_t* fingerprint, int allow_self_signed) {
+  static const br_x509_class br_x509_insecure_vtable PROGMEM = {
+    sizeof(x509_insecure_context),
+    insecure_start_chain,
+    insecure_start_cert,
+    insecure_append,
+    insecure_end_cert,
+    insecure_end_chain,
+    insecure_get_pkey
+  };
+
+  memset(ctx, 0, sizeof * ctx);
+  ctx->vtable = &br_x509_insecure_vtable;
+  ctx->done_cert = false;
+  ctx->match_fingerprint = use_fingerprint ? fingerprint : nullptr;
+  ctx->allow_self_signed = allow_self_signed ? 1 : 0;
+}
 
 
 // Some constants uses to init the server/client contexts
-  // Note that suites_P needs to be copied to RAM before use w/BearSSL!
-  // List copied verbatim from BearSSL/ssl_client_full.c
-  /*
-   * The "full" profile supports all implemented cipher suites.
-   *
-   * Rationale for suite order, from most important to least
-   * important rule:
-   *
-   * -- Don't use 3DES if AES or ChaCha20 is available.
-   * -- Try to have Forward Secrecy (ECDHE suite) if possible.
-   * -- When not using Forward Secrecy, ECDH key exchange is
-   *    better than RSA key exchange (slightly more expensive on the
-   *    client, but much cheaper on the server, and it implies smaller
-   *    messages).
-   * -- ChaCha20+Poly1305 is better than AES/GCM (faster, smaller code).
-   * -- GCM is better than CCM and CBC. CCM is better than CBC.
-   * -- CCM is preferable over CCM_8 (with CCM_8, forgeries may succeed
-   *    with probability 2^(-64)).
-   * -- AES-128 is preferred over AES-256 (AES-128 is already
-   *    strong enough, and AES-256 is 40% more expensive).
-   */
+// Note that suites_P needs to be copied to RAM before use w/BearSSL!
+// List copied verbatim from BearSSL/ssl_client_full.c
+/*
+  * The "full" profile supports all implemented cipher suites.
+  *
+  * Rationale for suite order, from most important to least
+  * important rule:
+  *
+  * -- Don't use 3DES if AES or ChaCha20 is available.
+  * -- Try to have Forward Secrecy (ECDHE suite) if possible.
+  * -- When not using Forward Secrecy, ECDH key exchange is
+  *    better than RSA key exchange (slightly more expensive on the
+  *    client, but much cheaper on the server, and it implies smaller
+  *    messages).
+  * -- ChaCha20+Poly1305 is better than AES/GCM (faster, smaller code).
+  * -- GCM is better than CCM and CBC. CCM is better than CBC.
+  * -- CCM is preferable over CCM_8 (with CCM_8, forgeries may succeed
+  *    with probability 2^(-64)).
+  * -- AES-128 is preferred over AES-256 (AES-128 is already
+  *    strong enough, and AES-256 is 40% more expensive).
+  */
 static const uint16_t suites_P[] PROGMEM = {
 #ifndef BEARSSL_SSL_BASIC
     BR_TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305_SHA256,
@@ -562,17 +562,19 @@ int tcp_ssl_free(struct tcp_pcb* pcb) {
 static void process_ssl_engine(tcp_ssl_pcb* ssl_pcb) {
   if (!ssl_pcb) return;
 
-  TCP_SSL_DEBUG("TLS: Processing SSL engine for pcb %p\n", ssl_pcb->tcp);
-
   br_ssl_engine_context* eng;
   if (ssl_pcb->is_server) {
     eng = &ssl_pcb->sc_server.eng;
   } else {
     eng = &ssl_pcb->sc_client.eng;
   }
+  
+  uint32_t state = br_ssl_engine_current_state(eng);  
+  
+  TCP_SSL_DEBUG("TLS: Processing SSL engine for pcb %p, state=%u\n", ssl_pcb->tcp, state);
 
   for (;;) {
-    uint32_t state = br_ssl_engine_current_state(eng);
+    state = br_ssl_engine_current_state(eng);
 
     if (state & BR_SSL_CLOSED) {
       if (ssl_pcb->on_error) {
@@ -583,15 +585,18 @@ static void process_ssl_engine(tcp_ssl_pcb* ssl_pcb) {
     }
 
     if (state & BR_SSL_RECVAPP) {
-      size_t len = 0;
-      unsigned char* buf = br_ssl_engine_recvapp_buf(eng, &len);
-      if (len > 0) {
-        TCP_SSL_DEBUG("TLS: %u bytes of application data received\n", (unsigned)len);
-        if (ssl_pcb->on_data) {
-          ssl_pcb->on_data(ssl_pcb->arg, ssl_pcb->tcp, buf, len);
+      int slen = eng->ixb - eng->ixa;
+      if (slen > 0 && slen < ASYNC_TCP_SSL_IN_BUFFER_SIZE) {
+        size_t len = 0;
+        unsigned char* buf = br_ssl_engine_recvapp_buf(eng, &len);
+        if (len > 0) {
+          TCP_SSL_DEBUG("TLS: %u bytes of application data received\n", (unsigned)len);
+          br_ssl_engine_recvapp_ack(eng, len);
+          if (ssl_pcb->on_data) {
+            ssl_pcb->on_data(ssl_pcb->arg, ssl_pcb->tcp, buf, len);
+          }
+          continue;
         }
-        br_ssl_engine_recvapp_ack(eng, len);
-        continue;
       }
     }
 
@@ -612,7 +617,7 @@ static void process_ssl_engine(tcp_ssl_pcb* ssl_pcb) {
     break;
   }
 
-  uint32_t state = br_ssl_engine_current_state(eng);
+  state = br_ssl_engine_current_state(eng);
   if (!ssl_pcb->handshake_done && 
      ((ssl_pcb->is_server && (state & BR_SSL_RECVAPP)) || 
      (!ssl_pcb->is_server && (state & BR_SSL_SENDAPP)))) {
@@ -623,6 +628,7 @@ static void process_ssl_engine(tcp_ssl_pcb* ssl_pcb) {
     }
   }
 }
+
 
 // --- Public Read/Write API ---
 
@@ -678,22 +684,16 @@ int tcp_ssl_read(struct tcp_pcb* pcb, struct pbuf* pb) {
     eng = &ssl_pcb->sc_client.eng;
 
   size_t pbuf_offset = 0;
-  while (pbuf_offset < pb->tot_len) {
+  while (true) {
     size_t len;
     unsigned char* buf = br_ssl_engine_recvrec_buf(eng, &len);
     if (len > 0) {
       size_t chunk_len = pbuf_copy_partial(pb, buf, len, pbuf_offset);
-      if (chunk_len == 0) {
-        TCP_SSL_DEBUG("Failed to copy %u bytes of %u at %u\n", len, pbuf_offset);
-        pbuf_free(pb);
-        return -1;
-      }
+      if (chunk_len == 0) break;
       br_ssl_engine_recvrec_ack(eng, chunk_len);
       pbuf_offset += chunk_len;
     } else {
-      TCP_SSL_DEBUG("Failed to allocate input buffer\n");
-      pbuf_free(pb);
-      return -1;
+      break;
     }
   }
 

@@ -38,6 +38,27 @@ class AsyncClient {
         // load X.509 certificates from the file system
         void load_ca_certs_from_pem(FS* fs, const char* path);
         void setInsecure(bool insecure = true) { _use_insecure = insecure;};
+
+        void setKnownKey(const BearSSL::PublicKey *pk, unsigned usages = BR_KEYTYPE_KEYX | BR_KEYTYPE_SIGN) {
+            _clearAuthenticationSettings();
+            _knownkey = pk;
+            _knownkey_usages = usages;
+        }
+        // Only check SHA1 fingerprint of certificate
+        bool setFingerprint(const uint8_t fingerprint[20]) {
+            _clearAuthenticationSettings();
+            _use_fingerprint = true;
+            memcpy_P(_fingerprint, fingerprint, 20);
+            return true;
+        }
+
+        bool setFingerprint(const char *fpStr);
+        
+        // Accept any certificate that's self-signed
+        void allowSelfSignedCerts() {
+            _clearAuthenticationSettings();
+            _use_self_signed = true;
+        }
     #else
         AsyncClient(tcp_pcb* pcb = 0);
         bool connect(IPAddress ip, uint16_t port);
@@ -220,7 +241,8 @@ class AsyncClient {
         std::shared_ptr<x509_insecure_context> _x509_insecure;
         std::shared_ptr<br_x509_knownkey_context> _x509_knownkey;
 
-         bool _initClientX509Validator(); // Set up X509 validator for a client conn.
+        bool _initClientX509Validator(); // Set up X509 validator for a client conn.
+        void _clearAuthenticationSettings();
 
         void _ssl_error(int8_t err) {if (_error_cb) _error_cb(_error_cb_arg, this, err + 64);};
         static void _s_data(void* arg, struct tcp_pcb* tcp, uint8_t* data, size_t len);

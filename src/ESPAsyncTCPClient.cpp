@@ -753,6 +753,55 @@ bool AsyncClient::_initClientX509Validator() {
   return true;
 }
 
+void AsyncClient::_clearAuthenticationSettings() {
+  _use_insecure = false;
+  _use_fingerprint = false;
+  _use_self_signed = false;
+  _knownkey = nullptr;
+}
+
+static uint8_t htoi (unsigned char c)
+{
+  if (c>='0' && c <='9') return c - '0';
+  else if (c>='A' && c<='F') return 10 + c - 'A';
+  else if (c>='a' && c<='f') return 10 + c - 'a';
+  else return 255;
+}
+
+// Set a fingerprint by parsing an ASCII string
+bool AsyncClient::setFingerprint(const char *fpStr) {
+  int idx = 0;
+  uint8_t c, d;
+  uint8_t fp[20];
+
+  while (idx < 20) {
+    c = pgm_read_byte(fpStr++);
+    if (!c) break; // String ended, done processing
+    d = pgm_read_byte(fpStr++);
+    if (!d) {
+      TCP_SSL_DEBUG("setFingerprint: FP too short\n");
+      return false; // Only half of the last hex digit, error
+    }
+    c = htoi(c);
+    d = htoi(d);
+    if ((c>15) || (d>15)) {
+      TCP_SSL_DEBUG("setFingerprint: Invalid char\n");
+      return false; // Error in one of the hex characters
+    }
+    fp[idx++] = (c<<4)|d;
+
+    // Skip 0 or more spaces or colons
+    while ( pgm_read_byte(fpStr) && (pgm_read_byte(fpStr)==' ' || pgm_read_byte(fpStr)==':') ) {
+      fpStr++;
+    }
+  }
+  if ((idx != 20) || pgm_read_byte(fpStr)) {
+    TCP_SSL_DEBUG("setFingerprint: Garbage at end of fp\n");
+    return false; // Garbage at EOL or we didn't have enough hex digits
+  }
+  return setFingerprint(fp);
+}
+
 #endif
 
 
