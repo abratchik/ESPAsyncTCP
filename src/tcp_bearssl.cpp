@@ -43,6 +43,21 @@ struct tcp_ssl_pcb {
   // Use two smaller, configurable split buffers.
   unsigned char inbuf[ASYNC_TCP_SSL_IN_BUFFER_SIZE];
   unsigned char outbuf[ASYNC_TCP_SSL_OUT_BUFFER_SIZE];
+  
+  // pointers to track app data currently in the inbuf and pending in the outbuf
+  unsigned char* in_buf_ptr;  
+  unsigned char* out_buf_ptr;  
+
+  // len of app data currently in the inbuf, and len of pending data in outbuf
+  size_t in_len;
+  size_t out_len;
+
+  // ---- RECORD REASSEMBLY ----
+  // Use the end of inbuf for accumulating partial TLS records.
+  // This prevents feeding incomplete records to BearSSL which causes AEAD MAC failures.
+  // The accumulator starts at the end of the buffer and grows backwards.
+  size_t recvrec_accum_pos;  // Position in inbuf where accumulated data starts (from end)
+
   // -------------------------
   bool is_server;
   bool handshake_done;
@@ -63,7 +78,17 @@ static tcp_ssl_pcb* tcp_ssl_pcbs = nullptr;
 // Forward declaration
 static void process_ssl_engine(tcp_ssl_pcb* ssl_pcb);
 
-// Helper to find a connection's state from its lwIP pcb
+// Helper to convert the TLS version number to a string
+static const char* tcp_ssl_version_string(uint16_t version) {
+  switch (version) {
+    case BR_TLS10: return "TLS1.0";
+    case BR_TLS11: return "TLS1.1";
+    case BR_TLS12: return "TLS1.2";
+    default: return "Unknown";
+  }
+}
+
+// Helper to find an SSL connection's state from its lwIP pcb
 static tcp_ssl_pcb* find_ssl_pcb(struct tcp_pcb* pcb) {
   tcp_ssl_pcb* iter = tcp_ssl_pcbs;
   while (iter) {
@@ -471,6 +496,12 @@ int tcp_ssl_new_client(struct tcp_pcb* pcb, const char* host, const br_x509_clas
   ssl_pcb->on_data = nullptr;
   ssl_pcb->on_handshake = nullptr;
   ssl_pcb->on_error = nullptr;
+  ssl_pcb->in_buf_ptr = nullptr;
+  ssl_pcb->out_buf_ptr = nullptr;
+  ssl_pcb->in_len = 0;
+  ssl_pcb->out_len = 0;
+  ssl_pcb->recvrec_accum_pos = ASYNC_TCP_SSL_IN_BUFFER_SIZE;  // Start at end of buffer
+
 
   br_ssl_client_base_init(&ssl_pcb->sc_client, suites_P, sizeof(suites_P) / sizeof(suites_P[0]));
 
@@ -512,6 +543,12 @@ int tcp_ssl_new_server(struct tcp_pcb* pcb, SSL_CTX* ssl_ctx) {
   ssl_pcb->on_data = nullptr;
   ssl_pcb->on_handshake = nullptr;
   ssl_pcb->on_error = nullptr;
+  ssl_pcb->in_buf_ptr = nullptr;
+  ssl_pcb->out_buf_ptr = nullptr;
+  ssl_pcb->in_len = 0;
+  ssl_pcb->out_len = 0;
+  ssl_pcb->recvrec_accum_pos = ASYNC_TCP_SSL_IN_BUFFER_SIZE;  // Start at end of buffer
+
 
   BearSSL_SSL_CTX* ctx = (BearSSL_SSL_CTX*)ssl_ctx;
 
@@ -585,28 +622,23 @@ static void process_ssl_engine(tcp_ssl_pcb* ssl_pcb) {
     }
 
     if (state & BR_SSL_RECVAPP) {
-      int slen = eng->ixb - eng->ixa;
-      if (slen > 0 && slen < ASYNC_TCP_SSL_IN_BUFFER_SIZE) {
-        size_t len = 0;
-        unsigned char* buf = br_ssl_engine_recvapp_buf(eng, &len);
-        if (len > 0) {
-          TCP_SSL_DEBUG("TLS: %u bytes of application data received\n", (unsigned)len);
-          br_ssl_engine_recvapp_ack(eng, len);
-          if (ssl_pcb->on_data) {
-            ssl_pcb->on_data(ssl_pcb->arg, ssl_pcb->tcp, buf, len);
-          }
-          continue;
+      ssl_pcb->in_buf_ptr = br_ssl_engine_recvapp_buf(eng, &(ssl_pcb->in_len));
+      if (ssl_pcb->in_len && ssl_pcb->in_len < ASYNC_TCP_SSL_IN_BUFFER_SIZE) {
+        TCP_SSL_DEBUG("TLS: Received %u bytes of application data, state=%u\n", (unsigned)ssl_pcb->in_len, state);
+        br_ssl_engine_recvapp_ack(eng, ssl_pcb->in_len);
+        if (ssl_pcb->on_data) {
+          ssl_pcb->on_data(ssl_pcb->arg, ssl_pcb->tcp, ssl_pcb->in_buf_ptr, ssl_pcb->in_len);
         }
+        continue;
       }
     }
 
-    size_t len;
-    unsigned char* buf = br_ssl_engine_sendrec_buf(eng, &len);
-    if (len > 0) {
-      if (tcp_sndbuf(ssl_pcb->tcp) >= len) {
-        TCP_SSL_DEBUG("TLS: sending %u bytes of SSL record, state=%u\n", (unsigned)len, state);
-        tcp_write(ssl_pcb->tcp, buf, len, TCP_WRITE_FLAG_COPY);
-        br_ssl_engine_sendrec_ack(eng, len);
+    ssl_pcb->out_buf_ptr = br_ssl_engine_sendrec_buf(eng, &(ssl_pcb->out_len));
+    if (ssl_pcb->out_len && ssl_pcb->out_len < ASYNC_TCP_SSL_OUT_BUFFER_SIZE) {
+      if (tcp_sndbuf(ssl_pcb->tcp) >= ssl_pcb->out_len) {
+        TCP_SSL_DEBUG("TLS: sending %u bytes of SSL record, state=%u\n", (unsigned)ssl_pcb->out_len, state);
+        tcp_write(ssl_pcb->tcp, ssl_pcb->out_buf_ptr, ssl_pcb->out_len, TCP_WRITE_FLAG_COPY);
+        br_ssl_engine_sendrec_ack(eng, ssl_pcb->out_len);
         tcp_output(ssl_pcb->tcp);
         continue;
       }
@@ -622,6 +654,13 @@ static void process_ssl_engine(tcp_ssl_pcb* ssl_pcb) {
      ((ssl_pcb->is_server && (state & BR_SSL_RECVAPP)) || 
      (!ssl_pcb->is_server && (state & BR_SSL_SENDAPP)))) {
     TCP_SSL_DEBUG("TLS: Handshake complete!\n");
+  #if DEBUG_ESP_TCP_SSL  
+    br_ssl_session_parameters params;
+    br_ssl_engine_get_session_parameters(eng, &params);
+    TCP_SSL_DEBUG("Protocol: %s, cipher suite: %04x\n", 
+                  tcp_ssl_version_string(params.version), 
+                  params.cipher_suite);
+  #endif
     ssl_pcb->handshake_done = true;
     if (ssl_pcb->on_handshake) {
       ssl_pcb->on_handshake(ssl_pcb->arg, ssl_pcb->tcp, &ssl_pcb->dummy_ssl);
@@ -683,22 +722,93 @@ int tcp_ssl_read(struct tcp_pcb* pcb, struct pbuf* pb) {
   else
     eng = &ssl_pcb->sc_client.eng;
 
-  size_t pbuf_offset = 0;
-  while (true) {
-    size_t len;
-    unsigned char* buf = br_ssl_engine_recvrec_buf(eng, &len);
-    if (len > 0) {
-      size_t chunk_len = pbuf_copy_partial(pb, buf, len, pbuf_offset);
-      if (chunk_len == 0) break;
-      br_ssl_engine_recvrec_ack(eng, chunk_len);
-      pbuf_offset += chunk_len;
-    } else {
-      break;
-    }
+  // size_t pbuf_offset = 0;
+  // while (true) {
+  //   size_t len;
+  //   unsigned char* buf = br_ssl_engine_recvrec_buf(eng, &len);
+  //   if (len > 0) {
+  //     size_t chunk_len = pbuf_copy_partial(pb, buf, len, pbuf_offset);
+  //     if (chunk_len == 0) break;
+  //     br_ssl_engine_recvrec_ack(eng, chunk_len);
+  //     pbuf_offset += chunk_len;
+  //   } else {
+  //     break;
+  //   }
+  // }
+
+   // ---- RECORD REASSEMBLY ----
+  // Use the end of inbuf for accumulating partial TLS records.
+  // This prevents feeding incomplete records to BearSSL which causes AEAD MAC failures.
+  // Accumulator grows backwards from the end of the buffer.
+  
+  size_t accum_space = ssl_pcb->recvrec_accum_pos;  // Space available at end of buffer
+  size_t to_copy = (pb->tot_len < accum_space) ? pb->tot_len : accum_space;
+  
+  if (to_copy > 0) {
+    pbuf_copy_partial(pb, ssl_pcb->inbuf + ssl_pcb->recvrec_accum_pos - to_copy, 
+                      to_copy, 0);
+    ssl_pcb->recvrec_accum_pos -= to_copy;
+    TCP_SSL_DEBUG("tcp_ssl_read: buffered %u bytes at end of inbuf (start pos: %u)\n", 
+                  (unsigned)to_copy, (unsigned)ssl_pcb->recvrec_accum_pos);
   }
 
   tcp_recved(pcb, pb->tot_len);
   pbuf_free(pb);
+
+  // Feed accumulated data to the BearSSL engine
+  // Calculate how much accumulated data we have
+  size_t accum_len = ASYNC_TCP_SSL_IN_BUFFER_SIZE - ssl_pcb->recvrec_accum_pos;
+  size_t consumed = 0;
+  int loop_count = 0;
+  
+  while (consumed < accum_len && loop_count < ASYNC_TCP_SSL_MAX_FEED_LOOPS) {
+    loop_count++;
+    size_t available;
+    unsigned char* buf = br_ssl_engine_recvrec_buf(eng, &available);
+    
+    if (available == 0) {
+      // Engine buffer is full, MUST process immediately to prevent WDT
+      TCP_SSL_DEBUG("tcp_ssl_read: engine buffer full (loop %d), processing before continuing\n", 
+                    loop_count);
+      process_ssl_engine(ssl_pcb);
+      
+      // Re-check available space after processing
+      buf = br_ssl_engine_recvrec_buf(eng, &available);
+      if (available == 0) {
+        // Still full, save data and exit to prevent WDT
+        TCP_SSL_DEBUG("tcp_ssl_read: engine still full after process, keeping %u bytes pending\n", 
+                      (unsigned)(accum_len - consumed));
+        break;
+      }
+    }
+    
+    size_t to_feed = (accum_len - consumed < available) ? 
+                     (accum_len - consumed) : available;
+    
+    memcpy(buf, ssl_pcb->inbuf + ssl_pcb->recvrec_accum_pos + consumed, to_feed);
+    br_ssl_engine_recvrec_ack(eng, to_feed);
+    consumed += to_feed;
+    
+    TCP_SSL_DEBUG("tcp_ssl_read: fed %u bytes to engine (consumed: %u/%u)\n", 
+                  (unsigned)to_feed, (unsigned)consumed, (unsigned)accum_len);
+  }
+  
+  if (loop_count >= ASYNC_TCP_SSL_MAX_FEED_LOOPS && consumed < accum_len) {
+    TCP_SSL_DEBUG("tcp_ssl_read: WARNING: Hit max feed loops, %u bytes pending\n", 
+                  (unsigned)(accum_len - consumed));
+  }
+
+  // Shift remaining data in accumulator (if any) to the front (end of buffer)
+  if (consumed > 0 && consumed < accum_len) {
+    size_t remaining = accum_len - consumed;
+    memmove(ssl_pcb->inbuf + ASYNC_TCP_SSL_IN_BUFFER_SIZE - remaining,
+            ssl_pcb->inbuf + ssl_pcb->recvrec_accum_pos + consumed, remaining);
+    ssl_pcb->recvrec_accum_pos = ASYNC_TCP_SSL_IN_BUFFER_SIZE - remaining;
+    TCP_SSL_DEBUG("tcp_ssl_read: kept %u bytes for next call (pos: %u)\n", 
+                  (unsigned)remaining, (unsigned)ssl_pcb->recvrec_accum_pos);
+  } else if (consumed > 0) {
+    ssl_pcb->recvrec_accum_pos = ASYNC_TCP_SSL_IN_BUFFER_SIZE;  // All data consumed
+  }
 
   process_ssl_engine(ssl_pcb);
 

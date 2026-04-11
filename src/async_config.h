@@ -15,6 +15,8 @@
 #define ASYNC_TCP_SSL_OUT_BUFFER_SIZE 1024
 #endif
 
+const int ASYNC_TCP_SSL_MAX_FEED_LOOPS = 10;  // Prevent infinite loops
+
 #define ASYNC_MAX_ACK_TIME 5000
 #define ASYNC_WRITE_FLAG_COPY \
   0x01  // will allocate new buffer to hold the data while sending (else will hold reference to the
