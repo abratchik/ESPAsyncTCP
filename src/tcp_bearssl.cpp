@@ -53,10 +53,10 @@ struct tcp_ssl_pcb {
   size_t out_len;
 
   // ---- RECORD REASSEMBLY ----
-  // Use the end of inbuf for accumulating partial TLS records.
-  // This prevents feeding incomplete records to BearSSL which causes AEAD MAC failures.
-  // The accumulator starts at the end of the buffer and grows backwards.
-  size_t recvrec_accum_pos;  // Position in inbuf where accumulated data starts (from end)
+  // Separate accumulator buffer for partial TLS records.
+  // This avoids reusing inbuf for both BearSSL input and accumulated record data.
+  unsigned char recvrec_accum[ASYNC_TCP_SSL_IN_BUFFER_SIZE];
+  size_t recvrec_accum_pos;  // Position in recvrec_accum where accumulated data starts (from end)
 
   // -------------------------
   bool is_server;
@@ -722,34 +722,40 @@ int tcp_ssl_read(struct tcp_pcb* pcb, struct pbuf* pb) {
   else
     eng = &ssl_pcb->sc_client.eng;
 
-  // size_t pbuf_offset = 0;
-  // while (true) {
-  //   size_t len;
-  //   unsigned char* buf = br_ssl_engine_recvrec_buf(eng, &len);
-  //   if (len > 0) {
-  //     size_t chunk_len = pbuf_copy_partial(pb, buf, len, pbuf_offset);
-  //     if (chunk_len == 0) break;
-  //     br_ssl_engine_recvrec_ack(eng, chunk_len);
-  //     pbuf_offset += chunk_len;
-  //   } else {
-  //     break;
-  //   }
-  // }
-
    // ---- RECORD REASSEMBLY ----
-  // Use the end of inbuf for accumulating partial TLS records.
+  // Use the end of recvrec_accum for accumulating partial TLS records.
   // This prevents feeding incomplete records to BearSSL which causes AEAD MAC failures.
   // Accumulator grows backwards from the end of the buffer.
   
-  size_t accum_space = ssl_pcb->recvrec_accum_pos;  // Space available at end of buffer
-  size_t to_copy = (pb->tot_len < accum_space) ? pb->tot_len : accum_space;
-  
-  if (to_copy > 0) {
-    pbuf_copy_partial(pb, ssl_pcb->inbuf + ssl_pcb->recvrec_accum_pos - to_copy, 
-                      to_copy, 0);
+  size_t remaining = pb->tot_len;
+  size_t pb_offset = 0;
+  while (remaining > 0) {
+    size_t accum_space = ssl_pcb->recvrec_accum_pos;
+    if (accum_space == 0) {
+      process_ssl_engine(ssl_pcb);
+      accum_space = ssl_pcb->recvrec_accum_pos;
+      if (accum_space == 0) {
+        break;
+      }
+    }
+
+    size_t to_copy = (remaining < accum_space) ? remaining : accum_space;
+    pbuf_copy_partial(pb, ssl_pcb->recvrec_accum + ssl_pcb->recvrec_accum_pos - to_copy,
+                      to_copy, pb_offset);
     ssl_pcb->recvrec_accum_pos -= to_copy;
-    TCP_SSL_DEBUG("tcp_ssl_read: buffered %u bytes at end of inbuf (start pos: %u)\n", 
-                  (unsigned)to_copy, (unsigned)ssl_pcb->recvrec_accum_pos);
+    pb_offset += to_copy;
+    remaining -= to_copy;
+
+    TCP_SSL_DEBUG("tcp_ssl_read: buffered %u bytes at end of recvrec_accum (pos: %u, remaining: %u)\n",
+                  (unsigned)to_copy, (unsigned)ssl_pcb->recvrec_accum_pos,
+                  (unsigned)remaining);
+  }
+
+  if (remaining > 0) {
+    TCP_SSL_DEBUG("tcp_ssl_read: accumulator overflow, closing connection with %u unbuffered bytes\n",
+                  (unsigned)remaining);
+    pbuf_free(pb);
+    return -1;
   }
 
   tcp_recved(pcb, pb->tot_len);
@@ -785,7 +791,7 @@ int tcp_ssl_read(struct tcp_pcb* pcb, struct pbuf* pb) {
     size_t to_feed = (accum_len - consumed < available) ? 
                      (accum_len - consumed) : available;
     
-    memcpy(buf, ssl_pcb->inbuf + ssl_pcb->recvrec_accum_pos + consumed, to_feed);
+    memcpy(buf, ssl_pcb->recvrec_accum + ssl_pcb->recvrec_accum_pos + consumed, to_feed);
     br_ssl_engine_recvrec_ack(eng, to_feed);
     consumed += to_feed;
     
@@ -801,8 +807,8 @@ int tcp_ssl_read(struct tcp_pcb* pcb, struct pbuf* pb) {
   // Shift remaining data in accumulator (if any) to the front (end of buffer)
   if (consumed > 0 && consumed < accum_len) {
     size_t remaining = accum_len - consumed;
-    memmove(ssl_pcb->inbuf + ASYNC_TCP_SSL_IN_BUFFER_SIZE - remaining,
-            ssl_pcb->inbuf + ssl_pcb->recvrec_accum_pos + consumed, remaining);
+    memmove(ssl_pcb->recvrec_accum + ASYNC_TCP_SSL_IN_BUFFER_SIZE - remaining,
+            ssl_pcb->recvrec_accum + ssl_pcb->recvrec_accum_pos + consumed, remaining);
     ssl_pcb->recvrec_accum_pos = ASYNC_TCP_SSL_IN_BUFFER_SIZE - remaining;
     TCP_SSL_DEBUG("tcp_ssl_read: kept %u bytes for next call (pos: %u)\n", 
                   (unsigned)remaining, (unsigned)ssl_pcb->recvrec_accum_pos);
