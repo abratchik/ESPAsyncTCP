@@ -1,6 +1,7 @@
 # Modernized ESPAsyncTCP for ESP8266
 
-This is a modernized fork of the  ESPAsyncTCP library modified by @dhimasardinata in order to support TLS based on BearSSL implementation included in the ESP8266  platform. The main objective of the fork is to ensure TLS is supported for the client connections as well. The other goal was to do cleanup and refactoring of the ESPAsyncTCP to ensure better readability and maintenance of the code. 
+This is a modernized fork of the  ESPAsyncTCP library modified by @dhimasardinata in order to support TLS based on BearSSL implementation included in the ESP8266  platform. 
+The main objective of this fork is to ensure TLS is supported for the client connections as well. The other goal was to do cleanup and refactoring of the ESPAsyncTCP to ensure better readability and maintenance of the code. 
 
 IMPORTANT! Some of the "orphained" classes like SyncClient and AsyncPrinter have been removed as the main objective of the library is to support async TCP communication. Synchronous TCP connection is already available through other libraries while printer communication is rather related to the Application layer of the OSI while AsyncTCP has to do with Network/Transport layers.
 
@@ -54,6 +55,9 @@ build_flags =
     -D DEBUG_ESP_TCP_SSL=1 
 ```
 
+IMPORTANT! enabling DEBUG_ESP_PORT=Serial will also have side effects as all the internal SDK-level
+debug messages will be also streamed to the serial output. This may clutter the view and also 
+cause WDT reset in some cases. 
 
 
 ### Usage Example: A Secure HTTPS Web Server

@@ -78,6 +78,7 @@ static tcp_ssl_pcb* tcp_ssl_pcbs = nullptr;
 // Forward declaration
 static void process_ssl_engine(tcp_ssl_pcb* ssl_pcb);
 
+#if defined(DEBUG_ESP_PORT) && DEBUG_ESP_TCP_SSL 
 // Helper to convert the TLS version number to a string
 static const char* tcp_ssl_version_string(uint16_t version) {
   switch (version) {
@@ -87,6 +88,7 @@ static const char* tcp_ssl_version_string(uint16_t version) {
     default: return "Unknown";
   }
 }
+#endif
 
 // Helper to find an SSL connection's state from its lwIP pcb
 static tcp_ssl_pcb* find_ssl_pcb(struct tcp_pcb* pcb) {
