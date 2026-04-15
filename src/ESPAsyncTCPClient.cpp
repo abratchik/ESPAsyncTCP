@@ -419,7 +419,7 @@ void AsyncClient::_sent(std::shared_ptr<ACErrorTracker>& errorTracker, tcp_pcb* 
   if (_use_tls && !_handshake_done) return;
 #endif
   _rx_last_packet = millis();
-  _tx_unacked_len -= _tx_unacked_len>len?len:0;
+  _tx_unacked_len -= _tx_unacked_len>len?len:_tx_unacked_len;
   _tx_acked_len += len;
   ASYNC_TCP_DEBUG("_sent[%u]: %4u, unacked=%4u, acked=%4u, space=%4u\n",
                   errorTracker->getConnectionId(), len, _tx_unacked_len, _tx_acked_len, space());
