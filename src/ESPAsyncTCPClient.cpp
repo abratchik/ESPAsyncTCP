@@ -45,9 +45,7 @@ AsyncClient::AsyncClient(tcp_pcb* pcb)
 #if ASYNC_TCP_SSL_ENABLED
       ,
       _use_tls(false),
-      _use_insecure(false),
-      _use_fingerprint(false),
-      _use_self_signed(false),
+      _ssl_auth_mode((AcSSLAuthMode)ASYNC_TCP_SSL_X509_MODE),
       _handshake_done(false)
 #endif
   {
@@ -345,14 +343,14 @@ void AsyncClient::_connected(std::shared_ptr<ACErrorTracker>& errorTracker, void
         _close();
       }
 
-      if (_use_insecure || _use_fingerprint || _use_self_signed) {
-        ASYNC_TCP_DEBUG("Connecting %s\n", _use_insecure? "insecure":
-                                          _use_fingerprint? "using fingetprint":
-                                          _use_self_signed? "using self-signed certificate":"");
+      if (_ssl_auth_mode & (SSL_AUTH_INSECURE | SSL_AUTH_FINGERPRINT | SSL_AUTH_SELF_SIGNED)) {
+        ASYNC_TCP_DEBUG("Connecting %s\n", _ssl_auth_mode & SSL_AUTH_INSECURE? "insecure":
+                                      _ssl_auth_mode & SSL_AUTH_FINGERPRINT? "using fingetprint":
+                                      _ssl_auth_mode & SSL_AUTH_SELF_SIGNED? "using self-signed certificate":"");
         ASYNC_TCP_DEBUG("Host: %s\n", _host);                    
         err = tcp_ssl_new_client(_pcb, _host, &_x509_insecure->vtable);
       }
-      else if(_knownkey) {
+      else if(_knownkey && (_ssl_auth_mode & SSL_AUTH_KNOWN_KEY)) {
         ASYNC_TCP_DEBUG("Connecting by known key");
         err = tcp_ssl_new_client(_pcb, _host, &_x509_knownkey->vtable);
       }
@@ -724,15 +722,17 @@ void AsyncClient::load_ca_certs_from_pem(FS* fs, const char* path ) {
 
 // Installs the appropriate X509 cert validation method for a client connection
 bool AsyncClient::_initClientX509Validator() {
-  if (_use_insecure || _use_fingerprint || _use_self_signed) {
+  if (_ssl_auth_mode & (SSL_AUTH_INSECURE | SSL_AUTH_FINGERPRINT | SSL_AUTH_SELF_SIGNED)) {
     // Use common insecure x509 authenticator
     _x509_insecure = std::make_shared<x509_insecure_context>();
     if (!_x509_insecure) {
       ASYNC_TCP_DEBUG("_initClientX509Validator: OOM for _x509_insecure\n");
       return false;
     }
-    br_x509_insecure_init(_x509_insecure.get(), _use_fingerprint, _fingerprint, _use_self_signed);
-  } else if (_knownkey) {
+    br_x509_insecure_init(_x509_insecure.get(), 
+                          _ssl_auth_mode & SSL_AUTH_FINGERPRINT, _fingerprint, 
+                          _ssl_auth_mode & SSL_AUTH_SELF_SIGNED);
+  } else if (_knownkey && (_ssl_auth_mode & SSL_AUTH_KNOWN_KEY)) {
     // Simple, pre-known public key authenticator, ignores cert completely.
     _x509_knownkey = std::make_shared<br_x509_knownkey_context>();
     if (!_x509_knownkey) {
@@ -771,9 +771,7 @@ bool AsyncClient::_initClientX509Validator() {
 }
 
 void AsyncClient::_clearAuthenticationSettings() {
-  _use_insecure = false;
-  _use_fingerprint = false;
-  _use_self_signed = false;
+  _ssl_auth_mode = (AcSSLAuthMode)SSL_AUTH_SECURE;
   _knownkey = nullptr;
 }
 

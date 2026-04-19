@@ -15,6 +15,15 @@
 #define ASYNC_TCP_SSL_OUT_BUFFER_SIZE 1024
 #endif
 
+#ifndef ASYNC_TCP_SSL_X509_MODE
+// 0: secure mode (perform full certificate validation with CA certs, etc.)
+// 1: insecure mode (skip all certificate validation, accept any cert)
+// 2: fingerprint mode (only check that the cert matches a given SHA1 fingerprint)
+// 3: self-signed mode (accept any cert that is self-signed, i.e. where the issuer and subject are the same)
+// 4: known key mode (only check that the cert's public key matches a known key, ignore the cert otherwise)
+#define ASYNC_TCP_SSL_X509_MODE 0 
+#endif
+
 const int ASYNC_TCP_SSL_MAX_FEED_LOOPS = 10;  // Prevent infinite loops
 
 #define ASYNC_MAX_ACK_TIME 5000

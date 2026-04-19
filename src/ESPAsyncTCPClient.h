@@ -21,7 +21,15 @@ extern "C" {
 
 #include "ESPAsyncTCPErrorTracker.h"
 
-
+#if ASYNC_TCP_SSL_ENABLED
+enum AcSSLAuthMode {
+    SSL_AUTH_SECURE = 0,
+    SSL_AUTH_INSECURE = 1,
+    SSL_AUTH_FINGERPRINT = 2,
+    SSL_AUTH_SELF_SIGNED = 4,
+    SSL_AUTH_KNOWN_KEY = 8
+};
+#endif
 
 /***************************************
  * Class managing outgoing connections
@@ -37,17 +45,20 @@ class AsyncClient {
         SSL* getSSL() {return _pcb?tcp_ssl_get_ssl(_pcb):NULL; };
         // load X.509 certificates from the file system
         void load_ca_certs_from_pem(FS* fs, const char* path);
-        void setInsecure(bool insecure = true) { _use_insecure = insecure;};
+        void setInsecure(bool insecure = true) { 
+            _ssl_auth_mode = insecure? (AcSSLAuthMode)(SSL_AUTH_INSECURE): SSL_AUTH_SECURE; 
+        };
 
         void setKnownKey(const BearSSL::PublicKey *pk, unsigned usages = BR_KEYTYPE_KEYX | BR_KEYTYPE_SIGN) {
             _clearAuthenticationSettings();
             _knownkey = pk;
+            _ssl_auth_mode = SSL_AUTH_KNOWN_KEY;
             _knownkey_usages = usages;
         }
         // Only check SHA1 fingerprint of certificate
         bool setFingerprint(const uint8_t fingerprint[20]) {
             _clearAuthenticationSettings();
-            _use_fingerprint = true;
+            _ssl_auth_mode = SSL_AUTH_FINGERPRINT;
             memcpy_P(_fingerprint, fingerprint, 20);
             return true;
         }
@@ -57,7 +68,7 @@ class AsyncClient {
         // Accept any certificate that's self-signed
         void allowSelfSignedCerts() {
             _clearAuthenticationSettings();
-            _use_self_signed = true;
+            _ssl_auth_mode = SSL_AUTH_SELF_SIGNED;
         }
     #else
         AsyncClient(tcp_pcb* pcb = 0);
@@ -223,10 +234,10 @@ class AsyncClient {
 
     #if ASYNC_TCP_SSL_ENABLED
         bool _use_tls; // if false the TLS is switched off (unencrypted connection)
-        bool _use_insecure; // true if X.509 server validation is to be skipped
-        bool _use_fingerprint;
+
+        AcSSLAuthMode _ssl_auth_mode;
+
         uint8_t _fingerprint[20];
-        bool _use_self_signed;
         
         unsigned _knownkey_usages;
 
