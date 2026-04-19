@@ -100,18 +100,24 @@ bool AsyncClient::connect(IPAddress ip, uint16_t port, bool use_tls) {
 #else
 bool AsyncClient::connect(IPAddress ip, uint16_t port) {
 #endif
-  if (connected())  // already connected
+  if (connected()) { 
+    // already connected
+    ASYNC_TCP_DEBUG("connect[%u]: Already connected to %s:%u\n", getConnectionId(), ip.toString().c_str(), port);
     return false;
+  }
+  ASYNC_TCP_DEBUG("connect[%u]: Connecting to %s:%u\n", getConnectionId(), ip.toString().c_str(), port);
   IPAddress addr;
   addr = ip;
 #if LWIP_VERSION_MAJOR == 1
   netif* interface = ip_route(&addr);
   if (!interface) {  // no route to host
+    ASYNC_TCP_DEBUG("connect[%u]: No route to host %s\n", getConnectionId(), ip.toString().c_str());
     return false;
   }
 #endif
   tcp_pcb* pcb = tcp_new();
   if (!pcb) {  // could not allocate pcb
+    ASYNC_TCP_DEBUG("connect[%u]: Failed to allocate pcb\n", getConnectionId());
     return false;
   }
 
@@ -122,7 +128,17 @@ bool AsyncClient::connect(IPAddress ip, uint16_t port) {
   tcp_arg(pcb, this);
   tcp_err(pcb, &_s_error);
   size_t err = tcp_connect(pcb, addr, port, (tcp_connected_fn)&_s_connected);
-  return (ERR_OK == err);
+  if (ERR_OK == err)
+  {
+    ASYNC_TCP_DEBUG("connect[%u]: tcp_connect() started to %s:%u\n", getConnectionId(), ip.toString().c_str(), port);
+    return true;
+  }
+  else
+  {
+    ASYNC_TCP_DEBUG("connect[%u]: tcp_connect() returned err: %s(%ld)\n", getConnectionId(),
+                    ACErrorTracker::errorToString(err), err);
+    return false;
+  }
 }
 
 #if ASYNC_TCP_SSL_ENABLED
@@ -133,6 +149,7 @@ bool AsyncClient::connect(const char* host, uint16_t port, bool use_tls) {
   _use_tls = use_tls;
 #else
 bool AsyncClient::connect(const char* host, uint16_t port) {
+  _connect_port = port;
 #endif
   IPAddress addr;
   err_t err = dns_gethostbyname(host, addr, (dns_found_callback)&_s_dns_found, this);
