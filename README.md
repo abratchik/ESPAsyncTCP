@@ -7,13 +7,11 @@ IMPORTANT! Some of the "orphained" classes like SyncClient and AsyncPrinter have
 
 ### Key Features & Enhancements
 
-- **Modern TLS/SSL Security:** Upgraded from the outdated `axTLS` to the modern, secure `BearSSL` engine, leveraging the implementation included in the ESP8266 Arduino Core.
+- **Support TLS1.0-1.2 Security:** Upgraded from the outdated `axTLS` to the modern, secure `BearSSL` engine, leveraging the implementation included in the ESP8266 Arduino Core.
 - **Drastically Reduced RAM Usage:** The new BearSSL integration uses memory-efficient, configurable I/O buffers, allowing for **significantly more concurrent secure (HTTPS/WSS) clients** on the memory-constrained ESP8266.
-- **Enhanced Stability:** Resolves common `LoadStoreError` crashes by safely handling TLS certificates and private keys stored in PROGMEM (flash memory).
 - **Fully Asynchronous:** Non-blocking operations for handling multiple simultaneous connections without complex multi-threading or `delay()`.
-- **Drop-in Upgrade:** Maintains full API compatibility with the original library. **No changes are required in your application code (`.ino` sketch)** to benefit from these improvements.
 
-This library is the foundation for the powerful [ESPAsyncWebServer](https://github.com/ESP32Async/ESPAsyncWebServer).
+This library is the foundation for the powerful [ESPAsyncWebServer](https://github.com/abratchik/ESPAsyncWebServer).
 
 ---
 
@@ -143,8 +141,9 @@ void loop() {
 
 This library serves as a core dependency for many popular projects:
 
-- [ESP Async Web Server](https://github.com/ESP32Async/ESPAsyncWebServer)
-- [Async MQTT client](https://github.com/marvinroger/async-mqtt-client)
+- [ESP Async Web Server](https://github.com/abratchik/ESPAsyncWebServer) 
+- [ESP Async HTTP Client](http://github.com/abratchik/ESPAsyncHTTPClient)
+- [Async MQTT client](https://github.com/abratchik/async-mqtt-client) 
 - [arduinoWebSockets](https://github.com/Links2004/arduinoWebSockets)
 - [ESP8266 Smart Home](https://github.com/baruch/esp8266_smart_home)
 
