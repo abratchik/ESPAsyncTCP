@@ -37,7 +37,7 @@ AsyncClient::AsyncClient(tcp_pcb* pcb)
       _tx_acked_len(0),
       _rx_ack_len(0),
       _rx_last_packet(0),
-      _rx_since_timeout(0),
+      _rx_since_timeout(ASYNC_MAX_RX_TIME),
       _ack_timeout(ASYNC_MAX_ACK_TIME),
       _connect_port(0),
       _recv_pbuf_flags(0),
