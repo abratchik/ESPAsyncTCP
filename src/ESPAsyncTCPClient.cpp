@@ -172,8 +172,6 @@ AsyncClient& AsyncClient::operator=(const AsyncClient& other) {
   }
   _errorTracker = other._errorTracker;
 
-  // I am confused when "other._pcb" falls out of scope the destructor will
-  // close it? TODO: Look to see where this is used and how it might work.
   _pcb = other._pcb;
   if (_pcb) {
     _rx_last_packet = millis();

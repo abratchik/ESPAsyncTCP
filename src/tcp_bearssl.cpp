@@ -40,13 +40,13 @@ struct tcp_ssl_pcb {
   br_ssl_server_context sc_server;
   br_x509_minimal_context xc;
   // --- MEMORY OPTIMIZATION ---
-  // Use two smaller, configurable split buffers.
-  unsigned char inbuf[ASYNC_TCP_SSL_IN_BUFFER_SIZE];
-  unsigned char outbuf[ASYNC_TCP_SSL_OUT_BUFFER_SIZE];
-  
+  // Allocate the raw SSL buffers only for active TLS connections.
+  unsigned char* inbuf;
+  unsigned char* outbuf;
+
   // pointers to track app data currently in the inbuf and pending in the outbuf
-  unsigned char* in_buf_ptr;  
-  unsigned char* out_buf_ptr;  
+  unsigned char* in_buf_ptr;
+  unsigned char* out_buf_ptr;
 
   // len of app data currently in the inbuf, and len of pending data in outbuf
   size_t in_len;
@@ -55,7 +55,7 @@ struct tcp_ssl_pcb {
   // ---- RECORD REASSEMBLY ----
   // Separate accumulator buffer for partial TLS records.
   // This avoids reusing inbuf for both BearSSL input and accumulated record data.
-  unsigned char recvrec_accum[ASYNC_TCP_SSL_IN_BUFFER_SIZE];
+  unsigned char* recvrec_accum;
   size_t recvrec_accum_pos;  // Position in recvrec_accum where accumulated data starts (from end)
 
   // -------------------------
@@ -70,6 +70,12 @@ struct tcp_ssl_pcb {
 
   SSL dummy_ssl;  // API compatibility
   struct tcp_ssl_pcb* next;
+
+  ~tcp_ssl_pcb() {
+    delete[] inbuf;
+    delete[] outbuf;
+    delete[] recvrec_accum;
+  }
 };
 
 // Linked list of all active BearSSL connections
@@ -502,8 +508,19 @@ int tcp_ssl_new_client(struct tcp_pcb* pcb, const char* host, const br_x509_clas
   ssl_pcb->out_buf_ptr = nullptr;
   ssl_pcb->in_len = 0;
   ssl_pcb->out_len = 0;
+  ssl_pcb->inbuf = nullptr;
+  ssl_pcb->outbuf = nullptr;
+  ssl_pcb->recvrec_accum = nullptr;
   ssl_pcb->recvrec_accum_pos = ASYNC_TCP_SSL_IN_BUFFER_SIZE;  // Start at end of buffer
 
+  ssl_pcb->inbuf = new (std::nothrow) unsigned char[ASYNC_TCP_SSL_IN_BUFFER_SIZE];
+  ssl_pcb->outbuf = new (std::nothrow) unsigned char[ASYNC_TCP_SSL_OUT_BUFFER_SIZE];
+  ssl_pcb->recvrec_accum = new (std::nothrow) unsigned char[ASYNC_TCP_SSL_IN_BUFFER_SIZE];
+  if (!ssl_pcb->inbuf || !ssl_pcb->outbuf || !ssl_pcb->recvrec_accum) {
+    delete ssl_pcb;
+    TCP_SSL_DEBUG("Failed to allocate SSL buffers\n");
+    return -1;
+  }
 
   br_ssl_client_base_init(&ssl_pcb->sc_client, suites_P, sizeof(suites_P) / sizeof(suites_P[0]));
 
@@ -512,13 +529,14 @@ int tcp_ssl_new_client(struct tcp_pcb* pcb, const char* host, const br_x509_clas
 
   // --- COMPATIBILITY FIX ---
   // Use the correct function name with the correct (5) arguments.
-  br_ssl_engine_set_buffers_bidi(&ssl_pcb->sc_client.eng, ssl_pcb->inbuf, sizeof(ssl_pcb->inbuf),
-                                 ssl_pcb->outbuf, sizeof(ssl_pcb->outbuf));
+  br_ssl_engine_set_buffers_bidi(&ssl_pcb->sc_client.eng, ssl_pcb->inbuf, ASYNC_TCP_SSL_IN_BUFFER_SIZE,
+                                 ssl_pcb->outbuf, ASYNC_TCP_SSL_OUT_BUFFER_SIZE);
   br_ssl_engine_set_versions(&ssl_pcb->sc_client.eng, BR_TLS10, BR_TLS12);                              
 
   // Set server name for SNI (required for TLS 1.2+)
   if(!br_ssl_client_reset(&ssl_pcb->sc_client, host, 0)) {
     TCP_SSL_DEBUG("Can't reset SSL client\n");
+    delete ssl_pcb;
     return -1;
   }
   // -------------------------
@@ -549,8 +567,18 @@ int tcp_ssl_new_server(struct tcp_pcb* pcb, SSL_CTX* ssl_ctx) {
   ssl_pcb->out_buf_ptr = nullptr;
   ssl_pcb->in_len = 0;
   ssl_pcb->out_len = 0;
+  ssl_pcb->inbuf = nullptr;
+  ssl_pcb->outbuf = nullptr;
+  ssl_pcb->recvrec_accum = nullptr;
   ssl_pcb->recvrec_accum_pos = ASYNC_TCP_SSL_IN_BUFFER_SIZE;  // Start at end of buffer
 
+  ssl_pcb->inbuf = new (std::nothrow) unsigned char[ASYNC_TCP_SSL_IN_BUFFER_SIZE];
+  ssl_pcb->outbuf = new (std::nothrow) unsigned char[ASYNC_TCP_SSL_OUT_BUFFER_SIZE];
+  ssl_pcb->recvrec_accum = new (std::nothrow) unsigned char[ASYNC_TCP_SSL_IN_BUFFER_SIZE];
+  if (!ssl_pcb->inbuf || !ssl_pcb->outbuf || !ssl_pcb->recvrec_accum) {
+    delete ssl_pcb;
+    return -1;
+  }
 
   BearSSL_SSL_CTX* ctx = (BearSSL_SSL_CTX*)ssl_ctx;
 
@@ -568,8 +596,8 @@ int tcp_ssl_new_server(struct tcp_pcb* pcb, SSL_CTX* ssl_ctx) {
 
   // --- COMPATIBILITY FIX ---
   // Use the correct function name with the correct (5) arguments.
-  br_ssl_engine_set_buffers_bidi(&ssl_pcb->sc_server.eng, ssl_pcb->inbuf, sizeof(ssl_pcb->inbuf),
-                                 ssl_pcb->outbuf, sizeof(ssl_pcb->outbuf));
+  br_ssl_engine_set_buffers_bidi(&ssl_pcb->sc_server.eng, ssl_pcb->inbuf, ASYNC_TCP_SSL_IN_BUFFER_SIZE,
+                                 ssl_pcb->outbuf, ASYNC_TCP_SSL_OUT_BUFFER_SIZE);
   // -------------------------
 
   ssl_pcb->next = tcp_ssl_pcbs;
