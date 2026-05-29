@@ -58,20 +58,7 @@ class AsyncClient {
         // Only check SHA1 fingerprint of certificate
         bool setFingerprint(const uint8_t* fingerprint, 
                             size_t size = TCP_SSL_FINGERPRINT_SIZE, 
-                            bool pgm_source = true) {
-            _clearAuthenticationSettings();
-            _ssl_auth_mode = SSL_AUTH_FINGERPRINT;
-            if(_fingerprint) delete[] _fingerprint;
-            _fingerprint = new (std::nothrow) uint8_t[size];
-            if(!fingerprint) return false;
-            if(pgm_source)
-                memcpy_P(_fingerprint, fingerprint, size);
-            else
-                memcpy(_fingerprint, fingerprint, size);
-            return true;
-        }
-
-        bool setFingerprint(const char *fpStr);
+                            bool pgm_source = false);
         
         // Accept any certificate that's self-signed
         void allowSelfSignedCerts() {
