@@ -56,10 +56,18 @@ class AsyncClient {
             _knownkey_usages = usages;
         }
         // Only check SHA1 fingerprint of certificate
-        bool setFingerprint(const uint8_t fingerprint[20]) {
+        bool setFingerprint(const uint8_t* fingerprint, 
+                            size_t size = TCP_SSL_FINGERPRINT_SIZE, 
+                            bool pgm_source = true) {
             _clearAuthenticationSettings();
             _ssl_auth_mode = SSL_AUTH_FINGERPRINT;
-            memcpy_P(_fingerprint, fingerprint, 20);
+            if(_fingerprint) delete[] _fingerprint;
+            _fingerprint = new (std::nothrow) uint8_t[size];
+            if(!fingerprint) return false;
+            if(pgm_source)
+                memcpy_P(_fingerprint, fingerprint, size);
+            else
+                memcpy(_fingerprint, fingerprint, size);
             return true;
         }
 
@@ -237,7 +245,7 @@ class AsyncClient {
 
         AcSSLAuthMode _ssl_auth_mode;
 
-        uint8_t _fingerprint[20];
+        uint8_t* _fingerprint;
         
         unsigned _knownkey_usages;
 

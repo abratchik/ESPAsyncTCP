@@ -785,9 +785,9 @@ static uint8_t htoi (unsigned char c)
 bool AsyncClient::setFingerprint(const char *fpStr) {
   int idx = 0;
   uint8_t c, d;
-  uint8_t fp[20];
+  uint8_t fp[TCP_SSL_FINGERPRINT_SIZE];
 
-  while (idx < 20) {
+  while (idx < TCP_SSL_FINGERPRINT_SIZE) {
     c = pgm_read_byte(fpStr++);
     if (!c) break; // String ended, done processing
     d = pgm_read_byte(fpStr++);
@@ -808,7 +808,7 @@ bool AsyncClient::setFingerprint(const char *fpStr) {
       fpStr++;
     }
   }
-  if ((idx != 20) || pgm_read_byte(fpStr)) {
+  if ((idx != TCP_SSL_FINGERPRINT_SIZE) || pgm_read_byte(fpStr)) {
     TCP_SSL_DEBUG("setFingerprint: Garbage at end of fp\n");
     return false; // Garbage at EOL or we didn't have enough hex digits
   }
